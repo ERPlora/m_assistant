@@ -323,16 +323,16 @@ class CreateEmployee(AssistantTool):
 @register_tool
 class CreateTaxClass(AssistantTool):
     name = "create_tax_class"
-    description = "Create a new tax class/rate"
+    description = "Create a new tax class/rate (e.g., 'IVA General 21%', 'IGIC 7%')"
     requires_confirmation = True
     required_permission = "assistant.use_setup_mode"
     parameters = {
         "type": "object",
         "properties": {
-            "name": {"type": "string", "description": "Tax class name"},
-            "rate": {"type": "number", "description": "Tax rate percentage"},
+            "name": {"type": "string", "description": "Tax class name (e.g., 'IVA General 21%')"},
+            "rate": {"type": "number", "description": "Tax rate as percentage (e.g., 21.0)"},
             "description": {"type": "string", "description": "Optional description"},
-            "is_default": {"type": "boolean", "description": "Whether this is the default"},
+            "is_default": {"type": "boolean", "description": "Whether this is the default tax class"},
         },
         "required": ["name", "rate", "description", "is_default"],
         "additionalProperties": False,
@@ -358,3 +358,59 @@ class CreateTaxClass(AssistantTool):
             session.add(tc)
             await session.flush()
             return {"success": True, "tax_class_id": str(tc.id), "name": tc.name, "rate": str(tc.rate)}
+
+
+@register_tool
+class EnableModule(AssistantTool):
+    name = "enable_module"
+    description = "Enable/activate a module on this hub via the ModuleRuntime"
+    requires_confirmation = True
+    required_permission = "assistant.use_setup_mode"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "Module ID to enable (e.g., 'inventory', 'pos')"},
+        },
+        "required": ["module_id"],
+        "additionalProperties": False,
+    }
+
+    async def execute(self, args: dict, request: Any) -> dict:
+        module_id = args["module_id"]
+        runtime = getattr(request.app.state, "module_runtime", None)
+        if not runtime:
+            return {"success": False, "error": "Module runtime not available"}
+        try:
+            await runtime.activate(module_id, request.state.hub_id)
+            return {"success": True, "message": f"Module {module_id} enabled."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
+@register_tool
+class DisableModule(AssistantTool):
+    name = "disable_module"
+    description = "Disable/deactivate a module on this hub via the ModuleRuntime"
+    requires_confirmation = True
+    required_permission = "assistant.use_setup_mode"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string", "description": "Module ID to disable"},
+        },
+        "required": ["module_id"],
+        "additionalProperties": False,
+    }
+
+    async def execute(self, args: dict, request: Any) -> dict:
+        module_id = args["module_id"]
+        if module_id == "assistant":
+            return {"success": False, "error": "Cannot disable the assistant module"}
+        runtime = getattr(request.app.state, "module_runtime", None)
+        if not runtime:
+            return {"success": False, "error": "Module runtime not available"}
+        try:
+            await runtime.deactivate(module_id, request.state.hub_id)
+            return {"success": True, "message": f"Module {module_id} disabled."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

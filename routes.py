@@ -156,8 +156,22 @@ async def chat(
     conversation_id = form.get("conversation_id", "")
     context = form.get("context", "general")
 
-    if not message:
-        return JSONResponse({"error": "Please type a message."}, status_code=400)
+    # Handle file uploads
+    attachments: list[dict] = []
+    for key in form:
+        if key.startswith("file"):
+            upload = form[key]
+            if hasattr(upload, "read"):
+                file_bytes = await upload.read()
+                if file_bytes:
+                    attachments.append({
+                        "bytes": file_bytes,
+                        "filename": upload.filename or "file",
+                        "content_type": upload.content_type or "application/octet-stream",
+                    })
+
+    if not message and not attachments:
+        return JSONResponse({"error": "Please type a message or attach a file."}, status_code=400)
 
     user_id = getattr(request.state, "user_id", None)
 
@@ -172,6 +186,7 @@ async def chat(
     # Store request data in cache for the stream endpoint
     _stream_cache[request_id] = {
         "message": message,
+        "attachments": attachments,
         "conversation_id": str(conversation.id),
         "context": context,
         "user_id": str(user_id) if user_id else None,
@@ -217,6 +232,7 @@ async def _stream_agentic_loop(
     from app.apps.configuration.models import HubConfig
 
     message = req_data["message"]
+    attachments = req_data.get("attachments", [])
     conversation_id = req_data["conversation_id"]
     context = req_data["context"]
     user_id_str = req_data["user_id"]
@@ -249,8 +265,22 @@ async def _stream_agentic_loop(
         hub_jwt = hub_config.hub_jwt
         cloud_api_url = hub_config.cloud_api_url or "https://erplora.com"
 
+    # Build multimodal input when attachments are present
+    if attachments:
+        from .services.file_processor import process_file
+
+        content_parts: list[dict] = []
+        if message:
+            content_parts.append({"type": "input_text", "text": message})
+        for att in attachments:
+            file_parts = await process_file(att["bytes"], att["filename"], att["content_type"])
+            content_parts.extend(file_parts)
+        initial_input: Any = content_parts
+    else:
+        initial_input = message
+
     # Agentic loop state
-    openai_input: Any = message
+    openai_input: Any = initial_input
     previous_response_id = conversation.openai_response_id or None
     is_new_session = not conversation.openai_response_id
     pending_confirmation: dict | None = None
@@ -642,6 +672,7 @@ def _render_message(
 def _format_confirmation_text(tool_name: str, tool_args: dict) -> str:
     """Format a human-readable description of the pending action."""
     descriptions: dict[str, Any] = {
+        # Hub core tools
         "update_store_config": lambda a: f"Update store: {', '.join(k for k, v in a.items() if v is not None)}",
         "select_blocks": lambda a: f"Select blocks: {', '.join(a.get('block_slugs', []))}",
         "enable_module": lambda a: f"Enable module: {a.get('module_id', '')}",
@@ -651,11 +682,42 @@ def _format_confirmation_text(tool_name: str, tool_args: dict) -> str:
         "create_tax_class": lambda a: f"Create tax: {a.get('name', '')} ({a.get('rate', '')}%)",
         "set_regional_config": lambda a: f"Set region: {', '.join(f'{k}={v}' for k, v in a.items() if v is not None)}",
         "set_business_info": lambda a: f"Set business: {a.get('business_name', '')}",
-        "set_tax_config": lambda a: f"Set tax: {a.get('tax_rate', '')}%",
+        "set_tax_config": lambda a: f"Set tax: {a.get('tax_rate', '')}% (included: {a.get('tax_included', '')})",
         "complete_setup_step": lambda a: "Complete hub setup",
-        "create_product": lambda a: f"Create product: {a.get('name', '')}",
+        # Inventory
+        "create_product": lambda a: f"Create product: {a.get('name', '')} ({a.get('price', '')})",
+        "update_product": lambda a: f"Update product: {a.get('product_id', '')}",
+        "create_category": lambda a: f"Create category: {a.get('name', '')}",
+        "adjust_stock": lambda a: f"Adjust stock: {a.get('quantity', '')} units for product {a.get('product_id', '')}",
+        # Customers
         "create_customer": lambda a: f"Create customer: {a.get('name', '')}",
-        "create_appointment": lambda a: f"Book appointment: {a.get('customer_name', '')}",
+        "update_customer": lambda a: f"Update customer: {a.get('customer_id', '')}",
+        # Services
+        "create_service": lambda a: f"Create service: {a.get('name', '')} ({a.get('price', '')})",
+        # Quotes
+        "create_quote": lambda a: f"Create quote: {a.get('title', '')}",
+        # Leads
+        "create_lead": lambda a: f"Create lead: {a.get('name', '')} ({a.get('company', '')})",
+        "move_lead_stage": lambda a: f"Move lead {a.get('lead_id', '')} to stage {a.get('stage_id', '')}",
+        # Purchase Orders
+        "create_purchase_order": lambda a: f"Create purchase order for supplier {a.get('supplier_id', '')}",
+        # Appointments
+        "create_appointment": lambda a: f"Book appointment: {a.get('customer_name', '')} at {a.get('start_datetime', '')}",
+        # Expenses
+        "create_expense": lambda a: f"Record expense: {a.get('title', '')} ({a.get('amount', '')})",
+        # Projects
+        "create_project": lambda a: f"Create project: {a.get('name', '')}",
+        "log_time_entry": lambda a: f"Log {a.get('hours', '')}h on project {a.get('project_id', '')}",
+        # Support
+        "create_ticket": lambda a: f"Create ticket: {a.get('subject', '')}",
+        # Discounts
+        "create_coupon": lambda a: f"Create coupon: {a.get('code', '')} ({a.get('discount_value', '')}{a.get('discount_type', '')})",
+        # Loyalty
+        "award_loyalty_points": lambda a: f"Award {a.get('points', '')} points to member {a.get('member_id', '')}",
+        # Shipping
+        "create_shipment": lambda a: f"Create shipment to {a.get('recipient_name', '')}",
+        # Gift Cards
+        "create_gift_card": lambda a: f"Create gift card: {a.get('initial_balance', '')} value",
     }
 
     formatter = descriptions.get(tool_name)

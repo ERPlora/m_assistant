@@ -77,6 +77,20 @@
         </div>
     </div>
 
+    <!-- File preview strip -->
+    <div x-show="selectedFiles.length > 0" x-cloak
+         class="px-4 py-2 border-t border-base-200 flex gap-2 flex-wrap">
+        <template x-for="(file, index) in selectedFiles" :key="index">
+            <div class="flex items-center gap-1 px-2 py-1 rounded-lg bg-base-200 text-sm">
+                <span x-text="file.name" class="truncate max-w-32"></span>
+                <span class="opacity-50 text-xs" x-text="formatFileSize(file.size)"></span>
+                <button type="button" @click="removeFile(index)" class="opacity-50 hover:opacity-100">
+                    {{ icon("close-outline", css_class="text-xs") }}
+                </button>
+            </div>
+        </template>
+    </div>
+
     <!-- Input area -->
     <div class="p-4 border-t border-base-200">
         <form @submit.prevent="sendMessage" x-ref="chatForm">
@@ -90,11 +104,23 @@
                     x-ref="messageInput"
                     class="input flex-1"
                     rows="1"
-                    :placeholder="recording ? '{{ _("Listening...") }}' : (loading ? '{{ _("Thinking...") }}' : '{{ _("Type or speak a message...") }}')"
+                    :placeholder="recording ? '{{ _("Listening...") }}' : (loading ? '{{ _("Thinking...") }}' : '{{ _("Type or speak a message, or attach a file...") }}')"
                     :disabled="loading"
                     @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
                     @input="autoResize($el)"
                     style="resize: none; max-height: 120px;"></textarea>
+                <input type="file"
+                       x-ref="fileInput"
+                       @change="onFileSelected($event)"
+                       multiple
+                       accept="image/*,.pdf,.txt,.csv,.xlsx,.docx"
+                       class="hidden" />
+                <button type="button"
+                        @click="$refs.fileInput.click()"
+                        class="btn btn-ghost"
+                        :disabled="loading">
+                    {{ icon("attach-outline") }}
+                </button>
                 <button type="button"
                         x-show="speechSupported"
                         @click="toggleVoice()"
@@ -134,6 +160,7 @@ document.addEventListener('alpine:init', function() {
         recording: false,
         skippingSetup: false,
         showHelp: false,
+        selectedFiles: [],
         speechSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
         _recognition: null,
         _eventSource: null,
@@ -176,7 +203,15 @@ document.addEventListener('alpine:init', function() {
             var messagesEl = this.$refs.messages;
             var userBubble = document.createElement('div');
             userBubble.className = 'chat-message chat-user';
-            userBubble.innerHTML = '<div class="chat-bubble">' + this._escapeHtml(message) + '</div>';
+            var fileInfo = '';
+            if (this.selectedFiles.length > 0) {
+                fileInfo = '<div class="flex gap-1 mt-1 flex-wrap">';
+                for (var i = 0; i < this.selectedFiles.length; i++) {
+                    fileInfo += '<span class="badge badge-sm opacity-75">' + this._escapeHtml(this.selectedFiles[i].name) + '</span>';
+                }
+                fileInfo += '</div>';
+            }
+            userBubble.innerHTML = '<div class="chat-bubble">' + this._escapeHtml(message) + fileInfo + '</div>';
             messagesEl.appendChild(userBubble);
             input.value = '';
             input.style.height = 'auto';
@@ -188,6 +223,9 @@ document.addEventListener('alpine:init', function() {
             formData.append('message', message);
             formData.append('conversation_id', this.conversationId);
             formData.append('context', context);
+            for (var i = 0; i < this.selectedFiles.length; i++) {
+                formData.append('file' + i, this.selectedFiles[i]);
+            }
             fetch('/m/assistant/chat', {
                 method: 'POST',
                 body: formData,
@@ -201,6 +239,7 @@ document.addEventListener('alpine:init', function() {
                 }
                 if (data.conversation_id) self.conversationId = String(data.conversation_id);
                 self._openStream(data.request_id);
+                self.selectedFiles = [];
             }).catch(function(err) {
                 self._removeTypingIndicator();
                 self._showError('Connection error: ' + err.message);
@@ -373,6 +412,29 @@ document.addEventListener('alpine:init', function() {
         scrollToBottom: function() {
             var self = this;
             this.$nextTick(function() { var el = self.$refs.messages; if (el) el.scrollTop = el.scrollHeight; });
+        },
+
+        onFileSelected: function(event) {
+            var files = Array.from(event.target.files || []);
+            var maxSize = 10 * 1024 * 1024; // 10MB
+            for (var i = 0; i < files.length; i++) {
+                if (files[i].size > maxSize) {
+                    this._showError('File "' + files[i].name + '" is too large (max 10MB)');
+                    continue;
+                }
+                this.selectedFiles.push(files[i]);
+            }
+            event.target.value = ''; // Reset input
+        },
+
+        removeFile: function(index) {
+            this.selectedFiles.splice(index, 1);
+        },
+
+        formatFileSize: function(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(0) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
         },
 
         autoResize: function(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
