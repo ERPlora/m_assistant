@@ -81,7 +81,7 @@ class ListAvailableBlocks(AssistantTool):
         cloud_url = getattr(config, "cloud_api_url", "https://erplora.com") if config else "https://erplora.com"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{cloud_url}/api/marketplace/solutions/")
+                resp = await client.get(f"{cloud_url}/api/v1/marketplace/solutions/")
                 if resp.status_code == 200:
                     blocks = resp.json()
                     items = blocks if isinstance(blocks, list) else blocks.get("results", [])

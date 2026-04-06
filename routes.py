@@ -303,7 +303,7 @@ async def _stream_agentic_loop(
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
                     "POST",
-                    f"{cloud_api_url}/api/hub/device/assistant/chat/stream/",
+                    f"{cloud_api_url}/api/v1/hub/device/assistant/chat/stream/",
                     json=payload,
                     headers={
                         "Authorization": f"Bearer {hub_jwt}",
