@@ -1,0 +1,36 @@
+<div class="p-4">
+    <h2 class="text-xl font-semibold mb-4">{{ _("Action Log") }}</h2>
+
+    {% if logs %}
+    <div class="list list-inset">
+        {% for log in logs %}
+        <div class="list-item list-item-multiline">
+            <div class="list-item-start">
+                {% if log.success %}
+                    {{ icon("checkmark-circle-outline", css_class="text-success") }}
+                {% else %}
+                    {{ icon("close-circle-outline", css_class="text-error") }}
+                {% endif %}
+            </div>
+            <div class="list-item-content">
+                <div class="list-item-label">
+                    {{ log.tool_name }}
+                    {% if log.confirmed %}
+                        <span class="badge badge-sm color-success ml-1">{{ _("confirmed") }}</span>
+                    {% else %}
+                        <span class="badge badge-sm color-warning ml-1">{{ _("pending") }}</span>
+                    {% endif %}
+                </div>
+                <div class="list-item-note">{{ log.created_at.strftime("%d/%m/%Y %H:%M:%S") if log.created_at else "" }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="callout callout-info">
+        <div class="callout-content">
+            <div class="callout-text">{{ _("No actions logged yet.") }}</div>
+        </div>
+    </div>
+    {% endif %}
+</div>

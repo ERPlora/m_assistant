@@ -1,0 +1,21 @@
+{% if role == "assistant" %}
+<div class="chat-message chat-assistant">
+    <div class="chat-bubble">
+        {{ content|replace('\n', '<br>')|safe }}
+    </div>
+</div>
+{% elif role == "user" %}
+<div class="chat-message chat-user">
+    <div class="chat-bubble">
+        {{ content|replace('\n', '<br>')|safe }}
+    </div>
+</div>
+{% elif role == "system" %}
+<div class="chat-message chat-system">
+    <div class="callout {% if error %}callout-error{% elif success %}callout-success{% else %}callout-info{% endif %}">
+        <div class="callout-content">
+            <div class="callout-text">{{ content }}</div>
+        </div>
+    </div>
+</div>
+{% endif %}

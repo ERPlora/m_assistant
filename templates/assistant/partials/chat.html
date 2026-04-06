@@ -1,0 +1,381 @@
+<div x-data="assistantChat" class="flex flex-col h-full" style="min-height: calc(100vh - 180px);">
+    <!-- Tier badge -->
+    <div x-show="tierName" x-cloak
+         class="flex items-center justify-between px-4 py-2 border-b border-base-200 text-xs">
+        <span class="badge badge-sm" x-text="tierName"></span>
+        <span x-show="sessionsLimit > 0" class="opacity-60">
+            <span x-text="sessionsUsed"></span> / <span x-text="sessionsLimit"></span> {{ _("sessions") }}
+        </span>
+    </div>
+
+    <!-- Chat header -->
+    <div class="flex items-center justify-between px-4 py-2 border-b border-base-200">
+        <div class="flex items-center gap-2">
+            <button @click="newChat()" class="btn btn-ghost btn-sm gap-1">
+                {{ icon("add-outline", css_class="text-base") }}
+                {{ _("New Chat") }}
+            </button>
+            {% if context == "setup" %}
+            <button @click="skipSetup()"
+                    class="btn btn-ghost btn-sm gap-1"
+                    :disabled="loading || skippingSetup">
+                <span x-show="!skippingSetup" class="inline-flex items-center gap-1">
+                    {{ icon("arrow-forward-outline", css_class="text-base") }}
+                    {{ _("Skip Setup") }}
+                </span>
+                <span x-show="skippingSetup" class="inline-flex items-center gap-1">
+                    <span class="loading loading-xs"></span>
+                    {{ _("Skipping...") }}
+                </span>
+            </button>
+            {% endif %}
+        </div>
+        <button @click="showHelp = !showHelp" class="btn btn-ghost btn-sm">
+            {{ icon("help-circle-outline", css_class="text-base") }}
+        </button>
+    </div>
+
+    <!-- Chat messages area -->
+    <div id="chat-messages"
+         class="flex-1 overflow-y-auto p-4 flex flex-col gap-3"
+         x-ref="messages">
+        <div class="chat-message chat-assistant" x-show="showHelp || !conversationId" x-cloak>
+            <div class="chat-bubble">
+                <p>{{ _("Hello! I'm your AI assistant. I can help you configure your hub, manage modules, create products, employees, and more.") }}</p>
+                <p class="mt-2 text-sm opacity-75">{{ _("Try asking me something like:") }}</p>
+                <ul class="mt-1 text-sm opacity-75 list-disc pl-4">
+                    <li>{{ _("What modules are available?") }}</li>
+                    <li>{{ _("Show me the current configuration") }}</li>
+                    <li>{{ _("Create an employee named Juan with manager role") }}</li>
+                </ul>
+                <p class="mt-3 text-sm">
+                    <a href="https://erplora.com/industries/" target="_blank" rel="noopener"
+                       class="text-primary hover:underline inline-flex items-center gap-1">
+                        {{ icon("open-outline", css_class="text-xs") }}
+                        {{ _("See business type examples for setup prompts") }}
+                    </a>
+                </p>
+                {% if context == "setup" %}
+                <div class="mt-3 pt-3 border-t border-base-300">
+                    <p class="text-sm opacity-75 mb-2">{{ _("Describe your business and I'll configure everything automatically. Or skip setup if you want to configure manually.") }}</p>
+                    <button type="button"
+                            @click="skipSetup()"
+                            class="btn btn-ghost btn-sm gap-1"
+                            :disabled="loading || skippingSetup">
+                        <span x-show="!skippingSetup" class="inline-flex items-center gap-1">
+                            {{ icon("arrow-forward-outline", css_class="text-base") }}
+                            {{ _("Skip setup") }}
+                        </span>
+                        <span x-show="skippingSetup" class="inline-flex items-center gap-1">
+                            <span class="loading loading-xs"></span>
+                            {{ _("Skipping...") }}
+                        </span>
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="p-4 border-t border-base-200">
+        <form @submit.prevent="sendMessage" x-ref="chatForm">
+            {{ csrf_input() }}
+            <input type="hidden" name="conversation_id" :value="conversationId">
+            <input type="hidden" name="context" value="{{ context|default('general') }}">
+
+            <div class="flex gap-2 items-end">
+                <textarea
+                    name="message"
+                    x-ref="messageInput"
+                    class="input flex-1"
+                    rows="1"
+                    :placeholder="recording ? '{{ _("Listening...") }}' : (loading ? '{{ _("Thinking...") }}' : '{{ _("Type or speak a message...") }}')"
+                    :disabled="loading"
+                    @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
+                    @input="autoResize($el)"
+                    style="resize: none; max-height: 120px;"></textarea>
+                <button type="button"
+                        x-show="speechSupported"
+                        @click="toggleVoice()"
+                        class="btn"
+                        :class="recording ? 'color-error' : 'btn-ghost'"
+                        :disabled="loading">
+                    <template x-if="!recording">
+                        <span>{{ icon("mic-outline") }}</span>
+                    </template>
+                    <template x-if="recording">
+                        <span>{{ icon("stop-outline") }}</span>
+                    </template>
+                </button>
+                <button type="submit"
+                        class="btn color-primary"
+                        :disabled="loading">
+                    <template x-if="!loading">
+                        <span>{{ icon("send-outline") }}</span>
+                    </template>
+                    <template x-if="loading">
+                        <span class="loading loading-sm"></span>
+                    </template>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+document.addEventListener('alpine:init', function() {
+    Alpine.data('assistantChat', function() { return {
+        loading: false,
+        conversationId: '',
+        tierName: '',
+        sessionsUsed: 0,
+        sessionsLimit: 0,
+        recording: false,
+        skippingSetup: false,
+        showHelp: false,
+        speechSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+        _recognition: null,
+        _eventSource: null,
+        _streamBubble: null,
+        _streamText: '',
+
+        newChat: function() {
+            this.conversationId = '';
+            this.showHelp = false;
+            this._closeStream();
+            var msgs = this.$refs.messages;
+            var els = msgs.querySelectorAll('.chat-user, .chat-assistant:not([x-show]), .chat-system');
+            els.forEach(function(el) { el.remove(); });
+        },
+
+        skipSetup: function() {
+            if (this.loading || this.skippingSetup) return;
+            var self = this;
+            this.skippingSetup = true;
+            fetch('/m/assistant/skip-setup', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            }).then(function(res) {
+                return res.json().then(function(data) { return { ok: res.ok, data: data }; });
+            }).then(function(result) {
+                if (!result.ok || result.data.error) throw new Error(result.data.error || 'Failed to skip setup.');
+                window.location.assign(result.data.redirect_url || '/');
+            }).catch(function(err) {
+                self.skippingSetup = false;
+                self._showError(err.message);
+            });
+        },
+
+        sendMessage: function() {
+            var input = this.$refs.messageInput;
+            var message = input.value.trim();
+            if (!message || this.loading) return;
+            this.loading = true;
+            var messagesEl = this.$refs.messages;
+            var userBubble = document.createElement('div');
+            userBubble.className = 'chat-message chat-user';
+            userBubble.innerHTML = '<div class="chat-bubble">' + this._escapeHtml(message) + '</div>';
+            messagesEl.appendChild(userBubble);
+            input.value = '';
+            input.style.height = 'auto';
+            this._addTypingIndicator();
+            this.scrollToBottom();
+            var self = this;
+            var context = this.$refs.chatForm.querySelector('[name=context]').value;
+            var formData = new FormData();
+            formData.append('message', message);
+            formData.append('conversation_id', this.conversationId);
+            formData.append('context', context);
+            fetch('/m/assistant/chat', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            }).then(function(res) { return res.json(); }).then(function(data) {
+                if (data.error) {
+                    self._removeTypingIndicator();
+                    self._showError(data.error);
+                    self.loading = false;
+                    return;
+                }
+                if (data.conversation_id) self.conversationId = String(data.conversation_id);
+                self._openStream(data.request_id);
+            }).catch(function(err) {
+                self._removeTypingIndicator();
+                self._showError('Connection error: ' + err.message);
+                self.loading = false;
+            });
+        },
+
+        _openStream: function(requestId) {
+            var self = this;
+            var streamUrl = '/m/assistant/stream/' + requestId;
+            this._streamBubble = null;
+            this._streamText = '';
+            var es = new EventSource(streamUrl);
+            this._eventSource = es;
+            es.onmessage = function(e) {
+                if (e.data === '[DONE]') { self._closeStream(); return; }
+                var event;
+                try { event = JSON.parse(e.data); } catch (err) { return; }
+                switch (event.type) {
+                    case 'thinking': break;
+                    case 'text_delta':
+                        self._removeTypingIndicator();
+                        self._appendText(event.text);
+                        break;
+                    case 'tool':
+                        self._removeTypingIndicator();
+                        self._finishStreamBubble();
+                        self._showToolIndicator(event.name);
+                        break;
+                    case 'tool_result':
+                        self._removeToolIndicator();
+                        self._addTypingIndicator();
+                        self.scrollToBottom();
+                        break;
+                    case 'confirmation':
+                        self._removeTypingIndicator();
+                        self._finishStreamBubble();
+                        self._insertHtml(event.html);
+                        break;
+                    case 'done':
+                        self._removeTypingIndicator();
+                        self._finishStreamBubble();
+                        if (event.conversation_id) self.conversationId = String(event.conversation_id);
+                        if (event.tier_info) {
+                            self.tierName = event.tier_info.tier_name || event.tier_info.tier || '';
+                            self.sessionsUsed = event.tier_info.sessions_used || 0;
+                            self.sessionsLimit = event.tier_info.sessions_limit || 0;
+                        }
+                        self._closeStream();
+                        break;
+                    case 'error':
+                        self._removeTypingIndicator();
+                        self._finishStreamBubble();
+                        self._showError(event.message);
+                        self._closeStream();
+                        break;
+                }
+            };
+            es.onerror = function() {
+                self._removeTypingIndicator();
+                self._finishStreamBubble();
+                if (self._eventSource) self._showError('Connection lost. Please try again.');
+                self._closeStream();
+            };
+        },
+
+        _closeStream: function() {
+            if (this._eventSource) { this._eventSource.close(); this._eventSource = null; }
+            this.loading = false;
+        },
+
+        _appendText: function(text) {
+            var messagesEl = this.$refs.messages;
+            if (!this._streamBubble) {
+                this._streamBubble = document.createElement('div');
+                this._streamBubble.className = 'chat-message chat-assistant';
+                var bubble = document.createElement('div');
+                bubble.className = 'chat-bubble';
+                this._streamBubble.appendChild(bubble);
+                messagesEl.appendChild(this._streamBubble);
+                this._streamText = '';
+            }
+            this._streamText += text;
+            this._streamBubble.querySelector('.chat-bubble').innerHTML = this._formatText(this._streamText);
+            this.scrollToBottom();
+        },
+
+        _finishStreamBubble: function() { this._streamBubble = null; this._streamText = ''; },
+
+        _addTypingIndicator: function() {
+            if (document.getElementById('typing-indicator')) return;
+            var typing = document.createElement('div');
+            typing.className = 'chat-message chat-assistant';
+            typing.id = 'typing-indicator';
+            typing.innerHTML = '<div class="chat-typing"><span class="chat-typing-dot"></span><span class="chat-typing-dot"></span><span class="chat-typing-dot"></span></div>';
+            this.$refs.messages.appendChild(typing);
+        },
+
+        _removeTypingIndicator: function() {
+            var el = document.getElementById('typing-indicator');
+            if (el) el.remove();
+        },
+
+        _showToolIndicator: function(name) {
+            var el = document.createElement('div');
+            el.className = 'chat-message chat-system';
+            el.id = 'tool-indicator';
+            el.innerHTML = '<div class="callout callout-info"><div class="callout-content"><div class="callout-text text-xs opacity-75">' + this._escapeHtml(name) + '\u2026</div></div></div>';
+            this.$refs.messages.appendChild(el);
+            this.scrollToBottom();
+        },
+
+        _removeToolIndicator: function() { var el = document.getElementById('tool-indicator'); if (el) el.remove(); },
+
+        _insertHtml: function(html) {
+            var tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            var messagesEl = this.$refs.messages;
+            while (tmp.firstChild) messagesEl.appendChild(tmp.firstChild);
+            if (window.htmx) htmx.process(messagesEl);
+            this.scrollToBottom();
+        },
+
+        _showError: function(message) {
+            var el = document.createElement('div');
+            el.className = 'chat-message chat-system';
+            el.innerHTML = '<div class="callout callout-error"><div class="callout-content"><div class="callout-text">' + this._escapeHtml(message) + '</div></div></div>';
+            this.$refs.messages.appendChild(el);
+            this.scrollToBottom();
+        },
+
+        _formatText: function(text) {
+            var d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML.replace(/\n/g, '<br>');
+        },
+
+        _escapeHtml: function(text) {
+            var d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        },
+
+        toggleVoice: function() { this.recording ? this.stopVoice() : this.startVoice(); },
+
+        startVoice: function() {
+            var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SR) return;
+            var recognition = new SR();
+            recognition.lang = document.documentElement.lang || 'en';
+            recognition.interimResults = true;
+            recognition.continuous = false;
+            var input = this.$refs.messageInput;
+            var beforeText = input.value;
+            recognition.onresult = function(event) {
+                var t = '';
+                for (var i = 0; i < event.results.length; i++) t += event.results[i][0].transcript;
+                input.value = beforeText + (beforeText ? ' ' : '') + t;
+            };
+            var self = this;
+            recognition.onend = function() { self.recording = false; self._recognition = null; };
+            recognition.onerror = function() { self.recording = false; self._recognition = null; };
+            this._recognition = recognition;
+            this.recording = true;
+            recognition.start();
+        },
+
+        stopVoice: function() { if (this._recognition) this._recognition.stop(); this.recording = false; },
+
+        scrollToBottom: function() {
+            var self = this;
+            this.$nextTick(function() { var el = self.$refs.messages; if (el) el.scrollTop = el.scrollHeight; });
+        },
+
+        autoResize: function(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
+    }; });
+});
+</script>
