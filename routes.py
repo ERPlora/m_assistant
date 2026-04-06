@@ -43,7 +43,7 @@ _stream_cache: TTLCache = TTLCache(maxsize=256, ttl=120)
 
 @router.get("/")
 @router.get("/chat")
-@htmx_view(module_id="assistant", view_id="chat", permissions=["assistant.use_chat"])
+@htmx_view(module_id="assistant", view_id="chat")
 async def chat_page(
     request: Request,
     db: DbSession,
@@ -72,7 +72,7 @@ async def chat_page(
 
 
 @router.get("/history")
-@htmx_view(module_id="assistant", view_id="history", permissions=["assistant.view_logs"])
+@htmx_view(module_id="assistant", view_id="history")
 async def history_page(
     request: Request,
     db: DbSession,
@@ -94,7 +94,7 @@ async def history_page(
 
 
 @router.get("/logs")
-@htmx_view(module_id="assistant", view_id="logs", permissions=["assistant.view_logs"])
+@htmx_view(module_id="assistant", view_id="logs")
 async def logs_page(
     request: Request,
     db: DbSession,
