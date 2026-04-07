@@ -361,9 +361,81 @@ class CreateTaxClass(AssistantTool):
 
 
 @register_tool
+class InstallModule(AssistantTool):
+    name = "install_module"
+    description = (
+        "Install a module from the marketplace catalog. Downloads from S3, "
+        "runs migrations, and activates it. Use this when a module is not yet installed."
+    )
+    requires_confirmation = False
+    required_permission = "assistant.use_setup_mode"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "module_id": {
+                "type": "string",
+                "description": "Module ID to install (e.g., 'inventory', 'customers', 'sales', 'orders')",
+            },
+        },
+        "required": ["module_id"],
+        "additionalProperties": False,
+    }
+
+    async def execute(self, args: dict, request: Any) -> dict:
+        module_id = args["module_id"]
+        runtime = getattr(request.app.state, "module_runtime", None)
+        if not runtime:
+            return {"success": False, "error": "Module runtime not available"}
+
+        # Check if already installed
+        from app.config.database import get_session_factory
+        from app.modules.models import HubModule, HubModuleVersion
+        from sqlalchemy import select
+
+        factory = get_session_factory()
+        async with factory() as db:
+            db.info["hub_id"] = request.state.hub_id
+
+            # Already installed?
+            existing = await db.execute(
+                select(HubModule).where(
+                    HubModule.hub_id == request.state.hub_id,
+                    HubModule.module_id == module_id,
+                )
+            )
+            if existing.scalar_one_or_none():
+                return {"success": True, "message": f"Module {module_id} is already installed."}
+
+            # Find latest version in catalog
+            cat_result = await db.execute(
+                select(HubModuleVersion)
+                .where(HubModuleVersion.module_id == module_id)
+                .order_by(HubModuleVersion.released_at.desc())
+                .limit(1)
+            )
+            catalog_entry = cat_result.scalar_one_or_none()
+            if not catalog_entry:
+                return {"success": False, "error": f"Module {module_id} not found in catalog."}
+
+            try:
+                result = await runtime.install(
+                    session=db,
+                    hub_id=request.state.hub_id,
+                    module_id=module_id,
+                    version=catalog_entry.version,
+                    checksum=catalog_entry.checksum_sha256,
+                )
+                if result.success:
+                    return {"success": True, "message": f"Module {module_id} v{catalog_entry.version} installed and activated."}
+                return {"success": False, "error": result.error or "Installation failed."}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+
+@register_tool
 class EnableModule(AssistantTool):
     name = "enable_module"
-    description = "Enable/activate a module on this hub via the ModuleRuntime"
+    description = "Enable/activate a module that is already installed but disabled"
     requires_confirmation = True
     required_permission = "assistant.use_setup_mode"
     parameters = {
