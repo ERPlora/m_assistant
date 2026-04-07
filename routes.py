@@ -954,13 +954,15 @@ async def _ws_handle_chat(
                 await ws_send(ws, {"type": "error", "message": "No response from AI service."})
                 return
 
-            # Save response ID
-            response_id = response_data.get("id", "")
+            # Save response ID for conversation threading
+            response_id = response_data.get("id", "") or response_data.get("response_id", "")
+            logger.info("[ASSISTANT WS] response_data keys: %s, response_id: %s", list(response_data.keys()), response_id)
             if response_id:
                 async with atomic(db) as session:
                     conv = await session.get(AssistantConversation, conversation.id)
                     if conv:
                         conv.openai_response_id = response_id
+                        logger.info("[ASSISTANT WS] Saved response_id %s for conversation %s", response_id, conversation.id)
 
             # No tool calls → done
             if not function_calls:
