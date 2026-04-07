@@ -1,6 +1,6 @@
 MODULE_ID = "assistant"
 MODULE_NAME = "AI Assistant"
-MODULE_VERSION = "1.4.5"
+MODULE_VERSION = "1.4.6"
 MODULE_ICON = "sparkles-outline"
 MODULE_DESCRIPTION = "AI-powered business assistant with contextual tools for inventory, sales, customers, invoicing, and more. Supports voice input and tiered subscription plans."
 MODULE_AUTHOR = "ERPlora"

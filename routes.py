@@ -286,7 +286,8 @@ async def _stream_agentic_loop(
             yield {"type": "error", "message": "Hub is not connected to Cloud."}
             return
         hub_jwt = hub_config.hub_jwt
-        cloud_api_url = hub_config.cloud_api_url or "https://erplora.com"
+        from app.config.settings import get_settings as _get_settings
+        cloud_api_url = _get_settings().CLOUD_API_URL
 
     # Build multimodal input when attachments are present
     if attachments:
