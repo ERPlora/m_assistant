@@ -164,14 +164,15 @@
         selectedFiles: [],
         speechSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
         _recognition: null,
-        _eventSource: null,
+        _ws: null,
+        _wsReconnectDelay: 2000,
         _streamBubble: null,
         _streamText: '',
 
         newChat: function() {
             this.conversationId = '';
             this.showHelp = false;
-            this._closeStream();
+            this.loading = false;
             var msgs = this.$refs.messages;
             var els = msgs.querySelectorAll('.chat-user, .chat-assistant:not([x-show]), .chat-system');
             els.forEach(function(el) { el.remove(); });
@@ -219,99 +220,99 @@
             input.style.height = 'auto';
             this._addTypingIndicator();
             this.scrollToBottom();
+            this._streamBubble = null;
+            this._streamText = '';
+            this.selectedFiles = [];
             var self = this;
             var context = this.$refs.chatForm.querySelector('[name=context]').value;
-            var formData = new FormData();
-            formData.append('message', message);
-            formData.append('conversation_id', this.conversationId);
-            formData.append('context', context);
-            for (var i = 0; i < this.selectedFiles.length; i++) {
-                formData.append('file' + i, this.selectedFiles[i]);
-            }
-            var csrfToken = getCsrfToken();
-            fetch('/m/assistant/chat', {
-                method: 'POST',
-                body: formData,
-                credentials: 'same-origin',
-                headers: { 'X-CSRF-Token': csrfToken }
-            }).then(function(res) { return res.json(); }).then(function(data) {
-                if (data.error) {
-                    self._removeTypingIndicator();
-                    self._showError(data.error);
-                    self.loading = false;
-                    return;
-                }
-                if (data.conversation_id) self.conversationId = String(data.conversation_id);
-                self._openStream(data.request_id);
-                self.selectedFiles = [];
-            }).catch(function(err) {
-                self._removeTypingIndicator();
-                self._showError('Connection error: ' + err.message);
-                self.loading = false;
+            this._ensureWs(function() {
+                self._ws.send(JSON.stringify({
+                    type: 'chat',
+                    message: message,
+                    conversation_id: self.conversationId,
+                    context: context
+                }));
             });
         },
 
-        _openStream: function(requestId) {
+        _ensureWs: function(onReady) {
             var self = this;
-            var streamUrl = '/m/assistant/stream/' + requestId;
-            this._streamBubble = null;
-            this._streamText = '';
-            var es = new EventSource(streamUrl);
-            this._eventSource = es;
-            es.onmessage = function(e) {
-                if (e.data === '[DONE]') { self._closeStream(); return; }
+            if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                onReady();
+                return;
+            }
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var ws = new WebSocket(proto + '//' + location.host + '/m/assistant/ws/chat');
+            this._ws = ws;
+            ws.onopen = function() {
+                self._wsReconnectDelay = 2000;
+                onReady();
+            };
+            ws.onmessage = function(e) {
                 var event;
                 try { event = JSON.parse(e.data); } catch (err) { return; }
-                switch (event.type) {
-                    case 'thinking': break;
-                    case 'text_delta':
-                        self._removeTypingIndicator();
-                        self._appendText(event.text);
-                        break;
-                    case 'tool':
-                        self._removeTypingIndicator();
-                        self._finishStreamBubble();
-                        self._showToolIndicator(event.name);
-                        break;
-                    case 'tool_result':
-                        self._removeToolIndicator();
-                        self._addTypingIndicator();
-                        self.scrollToBottom();
-                        break;
-                    case 'confirmation':
-                        self._removeTypingIndicator();
-                        self._finishStreamBubble();
-                        self._insertHtml(event.html);
-                        break;
-                    case 'done':
-                        self._removeTypingIndicator();
-                        self._finishStreamBubble();
-                        if (event.conversation_id) self.conversationId = String(event.conversation_id);
-                        if (event.tier_info) {
-                            self.tierName = event.tier_info.tier_name || event.tier_info.tier || '';
-                            self.sessionsUsed = event.tier_info.sessions_used || 0;
-                            self.sessionsLimit = event.tier_info.sessions_limit || 0;
-                        }
-                        self._closeStream();
-                        break;
-                    case 'error':
-                        self._removeTypingIndicator();
-                        self._finishStreamBubble();
-                        self._showError(event.message);
-                        self._closeStream();
-                        break;
+                self._handleWsEvent(event);
+            };
+            ws.onclose = function(e) {
+                self._ws = null;
+                if (self.loading) {
+                    self._removeTypingIndicator();
+                    self._finishStreamBubble();
+                    self._showError('Connection lost. Please try again.');
+                    self.loading = false;
                 }
             };
-            es.onerror = function() {
-                self._removeTypingIndicator();
-                self._finishStreamBubble();
-                if (self._eventSource) self._showError('Connection lost. Please try again.');
-                self._closeStream();
-            };
+            ws.onerror = function() {};
         },
 
-        _closeStream: function() {
-            if (this._eventSource) { this._eventSource.close(); this._eventSource = null; }
+        _handleWsEvent: function(event) {
+            switch (event.type) {
+                case 'thinking': break;
+                case 'text_delta':
+                    this._removeTypingIndicator();
+                    this._appendText(event.text);
+                    break;
+                case 'tool':
+                    this._removeTypingIndicator();
+                    this._finishStreamBubble();
+                    this._showToolIndicator(event.name);
+                    break;
+                case 'tool_result':
+                    this._removeToolIndicator();
+                    this._addTypingIndicator();
+                    this.scrollToBottom();
+                    break;
+                case 'confirmation':
+                    this._removeTypingIndicator();
+                    this._finishStreamBubble();
+                    this._insertHtml(event.html);
+                    break;
+                case 'done':
+                    this._removeTypingIndicator();
+                    this._finishStreamBubble();
+                    if (event.conversation_id) this.conversationId = String(event.conversation_id);
+                    if (event.tier_info) {
+                        this.tierName = event.tier_info.tier_name || event.tier_info.tier || '';
+                        this.sessionsUsed = event.tier_info.sessions_used || 0;
+                        this.sessionsLimit = event.tier_info.sessions_limit || 0;
+                    }
+                    this.loading = false;
+                    break;
+                case 'error':
+                    this._removeTypingIndicator();
+                    this._finishStreamBubble();
+                    this._showError(event.message);
+                    this.loading = false;
+                    break;
+                case 'pong':
+                    break;
+                case 'cancelled':
+                    break;
+            }
+        },
+
+        _closeWs: function() {
+            if (this._ws) { this._ws.close(); this._ws = null; }
             this.loading = false;
         },
 

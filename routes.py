@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 from cachetools import TTLCache
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.ai.registry import TOOL_REGISTRY, get_tools_for_user, tools_to_openai_schema
@@ -753,3 +753,380 @@ def _format_confirmation_text(tool_name: str, tool_args: dict) -> str:
 
     args_str = ", ".join(f"{k}={v}" for k, v in tool_args.items() if v is not None)
     return f"{tool_name}({args_str})"
+
+
+# ============================================================================
+# WEBSOCKET CHAT
+# ============================================================================
+
+
+@router.websocket("/ws/chat")
+async def chat_ws(websocket: WebSocket):
+    """WebSocket endpoint for real-time assistant chat.
+
+    Replaces the SSE POST /chat → GET /stream/{id} two-step flow
+    with a single persistent connection. No timeout issues.
+
+    Protocol:
+        Client → Server: {"type": "chat", "message": "...", "conversation_id": "...", "context": "..."}
+        Client → Server: {"type": "confirm", "log_id": "..."}
+        Client → Server: {"type": "cancel", "log_id": "..."}
+        Server → Client: {"type": "text_delta|tool|tool_result|confirmation|done|error", ...}
+    """
+    from app.core.ws import ws_handler
+
+    # Authenticate from session cookie (passed in WS upgrade request)
+    from app.config.settings import get_settings
+
+    settings = get_settings()
+    hub_id = settings.HUB_ID
+    if hub_id is None:
+        await websocket.close(code=4001, reason="Hub not configured")
+        return
+
+    # Resolve user from session cookie
+    from app.core.middleware.session import get_session_data
+
+    session_data = get_session_data(websocket)
+    user_id = session_data.get("user_id") if session_data else None
+    if not user_id:
+        await websocket.close(code=4003, reason="Authentication required")
+        return
+
+    user_id = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+
+    async def on_message(data: dict, ws: WebSocket) -> None:
+        msg_type = data.get("type", "")
+
+        if msg_type == "chat":
+            await _ws_handle_chat(ws, data, hub_id, user_id)
+        elif msg_type == "confirm":
+            await _ws_handle_confirm(ws, data, hub_id, user_id)
+        elif msg_type == "cancel":
+            await _ws_handle_cancel(ws, data, hub_id, user_id)
+        else:
+            await ws.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
+
+    await ws_handler(websocket, on_message)
+
+
+async def _ws_handle_chat(
+    ws: WebSocket,
+    data: dict,
+    hub_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    """Handle a chat message over WebSocket — runs the full agentic loop."""
+    from app.apps.configuration.models import HubConfig
+    from app.config.database import get_session_factory
+    from app.config.settings import get_settings
+    from app.core.ws import ws_send
+
+    message = (data.get("message") or "").strip()
+    conversation_id = data.get("conversation_id", "")
+    context = data.get("context", "general")
+
+    if not message:
+        await ws_send(ws, {"type": "error", "message": "Empty message"})
+        return
+
+    settings = get_settings()
+    factory = get_session_factory()
+
+    async with factory() as db:
+        db.info["hub_id"] = hub_id
+
+        # Create a fake request object for tools that access request.state
+        request = _build_fake_request(db, hub_id, user_id)
+
+        # Get or create conversation
+        conversation = await _get_or_create_conversation(
+            db, hub_id, user_id, conversation_id, context,
+        )
+        conversation_id = str(conversation.id)
+
+        # Build system prompt and tools
+        instructions = await build_system_prompt(request, context)
+        user_permissions: list[str] = getattr(request.state, "user_permissions", [])
+        setup_mode = context == "setup"
+        available_tools = get_tools_for_user(user_permissions, setup_mode=setup_mode)
+        tools_schema = tools_to_openai_schema(available_tools)
+
+        # Cloud config
+        hub_config = await HubConfig.get_config(db, hub_id)
+        if not hub_config or not hub_config.hub_jwt:
+            await ws_send(ws, {"type": "error", "message": "Hub is not connected to Cloud."})
+            return
+        hub_jwt = hub_config.hub_jwt
+        cloud_api_url = settings.CLOUD_API_URL
+
+        # Agentic loop
+        openai_input: Any = message
+        previous_response_id = conversation.openai_response_id or None
+        is_new_session = not conversation.openai_response_id
+        tier_info: dict | None = None
+
+        for iteration in range(MAX_TOOL_ITERATIONS):
+            await ws_send(ws, {"type": "thinking", "iteration": iteration + 1})
+
+            payload: dict[str, Any] = {"input": openai_input, "instructions": instructions}
+            if tools_schema:
+                payload["tools"] = tools_schema
+            if previous_response_id:
+                payload["previous_response_id"] = previous_response_id
+            if is_new_session and iteration == 0:
+                payload["new_session"] = True
+
+            # Call Cloud streaming endpoint
+            try:
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{cloud_api_url}/api/v1/hub/device/assistant/chat/stream/",
+                        json=payload,
+                        headers={
+                            "Authorization": f"Bearer {hub_jwt}",
+                            "Content-Type": "application/json",
+                        },
+                    ) as cloud_response:
+                        if cloud_response.status_code != 200:
+                            body = await cloud_response.aread()
+                            error_msg = "AI service error"
+                            try:
+                                error_data = json.loads(body)
+                                error_msg = error_data.get("error", body.decode()[:200])
+                            except Exception:
+                                error_msg = body.decode()[:200]
+                            if cloud_response.status_code == 403:
+                                error_msg = "AI Assistant subscription required."
+                            elif cloud_response.status_code == 429:
+                                error_msg = "Monthly usage limit reached."
+                            await ws_send(ws, {"type": "error", "message": error_msg})
+                            return
+
+                        # Extract tier info
+                        tier_header = cloud_response.headers.get("X-Assistant-Tier")
+                        usage_header = cloud_response.headers.get("X-Assistant-Usage")
+                        if tier_header:
+                            tier_info = {"tier": tier_header}
+                            if usage_header:
+                                try:
+                                    tier_info.update(json.loads(usage_header))
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+
+                        # Parse SSE from Cloud
+                        response_data: dict | None = None
+                        function_calls: list[dict] = []
+                        cloud_error: str | None = None
+
+                        async for line in cloud_response.aiter_lines():
+                            if not line or not line.startswith("data: "):
+                                continue
+                            data_str = line[6:]
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                event = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                continue
+
+                            event_type = event.get("type", "")
+                            if event_type == "text_delta":
+                                await ws_send(ws, event)
+                            elif event_type == "function_call":
+                                function_calls.append(event)
+                            elif event_type == "response":
+                                response_data = event
+                            elif event_type == "error":
+                                cloud_error = event.get("message", "Unknown AI error")
+
+            except httpx.HTTPError as e:
+                logger.error("[ASSISTANT WS] Cloud stream error: %s", e)
+                await ws_send(ws, {"type": "error", "message": f"AI service connection error: {e!s}"})
+                return
+
+            if cloud_error:
+                await ws_send(ws, {"type": "error", "message": cloud_error})
+                return
+
+            if not response_data:
+                await ws_send(ws, {"type": "error", "message": "No response from AI service."})
+                return
+
+            # Save response ID
+            response_id = response_data.get("id", "")
+            if response_id:
+                async with atomic(db) as session:
+                    conv = await session.get(AssistantConversation, conversation.id)
+                    if conv:
+                        conv.openai_response_id = response_id
+
+            # No tool calls → done
+            if not function_calls:
+                break
+
+            # Execute tool calls
+            tool_results: list[dict] = []
+            for fc in function_calls:
+                tool_name = fc.get("name", "")
+                call_id = fc.get("call_id", "")
+                try:
+                    tool_args = json.loads(fc.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    tool_args = {}
+
+                tool = TOOL_REGISTRY.get(tool_name)
+                if not tool:
+                    tool_results.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps({"error": f"Unknown tool: {tool_name}"}),
+                    })
+                    continue
+
+                # Permission check
+                if tool.required_permission and tool.required_permission not in user_permissions:
+                    tool_results.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps({"error": f"Permission denied: {tool.required_permission}"}),
+                    })
+                    continue
+
+                # Execute tool
+                await ws_send(ws, {"type": "tool", "name": tool_name, "args": tool_args})
+                try:
+                    result = await tool.execute(tool_args, request)
+                    success = not result.get("error")
+
+                    # Log action
+                    async with atomic(db) as session:
+                        session.add(AssistantActionLog(
+                            hub_id=hub_id,
+                            created_by=user_id,
+                            conversation_id=conversation.id,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            result=result,
+                            success=success,
+                            confirmed=True,
+                        ))
+
+                    tool_results.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result, default=str),
+                    })
+                    await ws_send(ws, {"type": "tool_result", "name": tool_name, "success": success})
+
+                except Exception as exc:
+                    logger.exception("[ASSISTANT WS] Tool %s failed", tool_name)
+                    tool_results.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps({"error": str(exc)}),
+                    })
+                    await ws_send(ws, {"type": "tool_result", "name": tool_name, "success": False})
+
+            # Send tool results back for next iteration
+            openai_input = tool_results
+            previous_response_id = response_id
+            is_new_session = False
+
+        # Done
+        await ws_send(ws, {
+            "type": "done",
+            "conversation_id": conversation_id,
+            "tier_info": tier_info,
+        })
+
+        logger.info(
+            "[ASSISTANT WS] Chat completed: conversation=%s",
+            conversation_id,
+        )
+
+
+async def _ws_handle_confirm(
+    ws: WebSocket, data: dict, hub_id: uuid.UUID, user_id: uuid.UUID,
+) -> None:
+    """Handle confirmation of a pending action over WebSocket."""
+    from app.config.database import get_session_factory
+    from app.core.ws import ws_send
+
+    log_id = data.get("log_id", "")
+    if not log_id:
+        await ws_send(ws, {"type": "error", "message": "Missing log_id"})
+        return
+
+    factory = get_session_factory()
+    async with factory() as db:
+        db.info["hub_id"] = hub_id
+        request = _build_fake_request(db, hub_id, user_id)
+
+        async with atomic(db) as session:
+            log = await session.get(AssistantActionLog, uuid.UUID(log_id))
+            if not log or log.confirmed:
+                await ws_send(ws, {"type": "error", "message": "Action not found or already confirmed"})
+                return
+
+            tool = TOOL_REGISTRY.get(log.tool_name)
+            if not tool:
+                await ws_send(ws, {"type": "error", "message": f"Tool not found: {log.tool_name}"})
+                return
+
+            try:
+                result = await tool.execute(log.tool_args, request)
+                log.confirmed = True
+                log.success = not result.get("error")
+                log.result = result
+                await ws_send(ws, {
+                    "type": "tool_result",
+                    "name": log.tool_name,
+                    "success": log.success,
+                    "confirmed": True,
+                })
+            except Exception as exc:
+                log.success = False
+                log.error_message = str(exc)
+                await ws_send(ws, {"type": "error", "message": f"Tool execution failed: {exc}"})
+
+
+async def _ws_handle_cancel(
+    ws: WebSocket, data: dict, hub_id: uuid.UUID, user_id: uuid.UUID,
+) -> None:
+    """Handle cancellation of a pending action over WebSocket."""
+    from app.config.database import get_session_factory
+    from app.core.ws import ws_send
+
+    log_id = data.get("log_id", "")
+    if not log_id:
+        await ws_send(ws, {"type": "error", "message": "Missing log_id"})
+        return
+
+    factory = get_session_factory()
+    async with factory() as db:
+        db.info["hub_id"] = hub_id
+        async with atomic(db) as session:
+            log = await session.get(AssistantActionLog, uuid.UUID(log_id))
+            if log:
+                await session.delete(log)
+        await ws_send(ws, {"type": "cancelled", "log_id": log_id})
+
+
+def _build_fake_request(db, hub_id, user_id):
+    """Build a minimal Request-like object for tools that access request.state."""
+
+    class FakeState:
+        pass
+
+    class FakeRequest:
+        def __init__(self):
+            self.state = FakeState()
+
+    req = FakeRequest()
+    req.state.db = db
+    req.state.hub_id = hub_id
+    req.state.user_id = user_id
+    req.state.user_permissions = ["*"]  # Admin has all permissions
+    return req
