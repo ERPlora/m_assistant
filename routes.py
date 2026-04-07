@@ -217,8 +217,7 @@ async def chat_stream(
     hub_id: HubId,
 ):
     """SSE endpoint that runs the agentic loop and streams events."""
-    # Expose db/hub_id on request.state for assistant tools that access them directly
-    request.state.db = db
+    # Store hub_id and user_id on request.state (these are simple values, safe across async)
     request.state.hub_id = hub_id
     request.state.user_id = user.id if user else None
 
@@ -232,18 +231,28 @@ async def chat_stream(
 
     return await sse_stream(
         request,
-        _stream_agentic_loop(req_data, request, db, hub_id),
+        _stream_agentic_loop(req_data, request, hub_id),
     )
 
 
 async def _stream_agentic_loop(
     req_data: dict[str, Any],
     request: Request,
-    db: DbSession,
     hub_id: uuid.UUID,
 ) -> AsyncGenerator[dict[str, Any]]:
-    """Async generator that runs the agentic loop and yields SSE events."""
+    """Async generator that runs the agentic loop and yields SSE events.
+
+    Creates its own DB session because FastAPI dependency-injected sessions
+    are closed before the SSE generator starts executing.
+    """
     from app.apps.configuration.models import HubConfig
+    from app.config.database import get_session_factory
+
+    factory = get_session_factory()
+    db = await factory().__aenter__()
+    db.info["hub_id"] = hub_id
+    # Expose on request.state so assistant tools can access it
+    request.state.db = db
 
     message = req_data["message"]
     attachments = req_data.get("attachments", [])
