@@ -839,6 +839,16 @@ async def _ws_handle_chat(
         # Create a fake request object for tools that access request.state
         request = _build_fake_request(db, hub_id, user_id, app=ws.app)
 
+        # Load user info for system prompt (role, name)
+        from app.apps.accounts.models import LocalUser
+        from sqlalchemy import select as sa_select
+        _user = (await db.execute(
+            sa_select(LocalUser).where(LocalUser.id == user_id)
+        )).scalar_one_or_none()
+        if _user:
+            request.state.user_name = _user.name or _user.email or "Admin"
+            request.state.user_role = "admin" if _user.is_admin else "employee"
+
         # Get or create conversation
         conversation = await _get_or_create_conversation(
             db, hub_id, user_id, conversation_id, context,
@@ -1133,5 +1143,7 @@ def _build_fake_request(db, hub_id, user_id, app=None):
     req.state.hub_id = hub_id
     req.state.user_id = user_id
     req.state.user_permissions = ["*"]  # Admin has all permissions
+    req.state.user_role = "admin"
+    req.state.user_name = "Admin"
     req.app = app  # Real FastAPI app for request.app.state access
     return req
