@@ -52,6 +52,10 @@ async def chat_page(
     context: str = "general",
 ):
     """Main chat page."""
+    request.state.db = db
+    request.state.hub_id = hub_id
+    request.state.user_id = user.id if user else None
+
     if context not in ("general", "setup"):
         context = "general"
 
@@ -151,6 +155,11 @@ async def chat(
     hub_id: HubId,
 ) -> JSONResponse:
     """Initiate a chat message. Returns a request_id for SSE streaming."""
+    # Expose db/hub_id on request.state for assistant tools
+    request.state.db = db
+    request.state.hub_id = hub_id
+    request.state.user_id = user.id if user else None
+
     form = await request.form()
     message = (form.get("message") or "").strip()
     conversation_id = form.get("conversation_id", "")
@@ -208,6 +217,11 @@ async def chat_stream(
     hub_id: HubId,
 ):
     """SSE endpoint that runs the agentic loop and streams events."""
+    # Expose db/hub_id on request.state for assistant tools that access them directly
+    request.state.db = db
+    request.state.hub_id = hub_id
+    request.state.user_id = user.id if user else None
+
     req_data = _stream_cache.pop(request_id, None)
     if not req_data:
 
