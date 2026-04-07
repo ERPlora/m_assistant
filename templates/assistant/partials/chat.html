@@ -181,10 +181,11 @@
             if (this.loading || this.skippingSetup) return;
             var self = this;
             this.skippingSetup = true;
+            var csrfToken = document.cookie.split('; ').find(c => c.startsWith('csrf_token='))?.split('=')[1] || '';
             fetch('/m/assistant/skip-setup', {
                 method: 'POST',
                 credentials: 'same-origin',
-                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrfToken }
             }).then(function(res) {
                 return res.json().then(function(data) { return { ok: res.ok, data: data }; });
             }).then(function(result) {
@@ -227,10 +228,12 @@
             for (var i = 0; i < this.selectedFiles.length; i++) {
                 formData.append('file' + i, this.selectedFiles[i]);
             }
+            var csrfToken = document.cookie.split('; ').find(c => c.startsWith('csrf_token='))?.split('=')[1] || '';
             fetch('/m/assistant/chat', {
                 method: 'POST',
                 body: formData,
-                credentials: 'same-origin'
+                credentials: 'same-origin',
+                headers: { 'X-CSRF-Token': csrfToken }
             }).then(function(res) { return res.json(); }).then(function(data) {
                 if (data.error) {
                     self._removeTypingIndicator();
