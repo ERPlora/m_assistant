@@ -837,7 +837,7 @@ async def _ws_handle_chat(
         db.info["hub_id"] = hub_id
 
         # Create a fake request object for tools that access request.state
-        request = _build_fake_request(db, hub_id, user_id)
+        request = _build_fake_request(db, hub_id, user_id, app=ws.app)
 
         # Get or create conversation
         conversation = await _get_or_create_conversation(
@@ -1062,7 +1062,7 @@ async def _ws_handle_confirm(
     factory = get_session_factory()
     async with factory() as db:
         db.info["hub_id"] = hub_id
-        request = _build_fake_request(db, hub_id, user_id)
+        request = _build_fake_request(db, hub_id, user_id, app=ws.app)
 
         async with atomic(db) as session:
             log = await session.get(AssistantActionLog, uuid.UUID(log_id))
@@ -1114,8 +1114,8 @@ async def _ws_handle_cancel(
         await ws_send(ws, {"type": "cancelled", "log_id": log_id})
 
 
-def _build_fake_request(db, hub_id, user_id):
-    """Build a minimal Request-like object for tools that access request.state."""
+def _build_fake_request(db, hub_id, user_id, app=None):
+    """Build a minimal Request-like object for tools that access request.state/app."""
 
     class FakeState:
         pass
@@ -1129,4 +1129,5 @@ def _build_fake_request(db, hub_id, user_id):
     req.state.hub_id = hub_id
     req.state.user_id = user_id
     req.state.user_permissions = ["*"]  # Admin has all permissions
+    req.app = app  # Real FastAPI app for request.app.state access
     return req
