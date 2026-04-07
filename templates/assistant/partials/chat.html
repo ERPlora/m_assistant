@@ -150,8 +150,9 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
-document.addEventListener('alpine:init', function() {
-    Alpine.data('assistantChat', function() { return {
+(function() {
+    function _registerAssistantChat() {
+        Alpine.data('assistantChat', function() { return {
         loading: false,
         conversationId: '',
         tierName: '',
@@ -439,5 +440,11 @@ document.addEventListener('alpine:init', function() {
 
         autoResize: function(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
     }; });
-});
+    }
+    if (typeof Alpine !== 'undefined' && Alpine.version) {
+        _registerAssistantChat();
+    } else {
+        document.addEventListener('alpine:init', _registerAssistantChat);
+    }
+})();
 </script>
