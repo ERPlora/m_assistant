@@ -181,7 +181,7 @@
             if (this.loading || this.skippingSetup) return;
             var self = this;
             this.skippingSetup = true;
-            var csrfToken = document.cookie.split('; ').find(c => c.startsWith('csrf_token='))?.split('=')[1] || '';
+            var csrfToken = getCsrfToken();
             fetch('/m/assistant/skip-setup', {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -228,7 +228,7 @@
             for (var i = 0; i < this.selectedFiles.length; i++) {
                 formData.append('file' + i, this.selectedFiles[i]);
             }
-            var csrfToken = document.cookie.split('; ').find(c => c.startsWith('csrf_token='))?.split('=')[1] || '';
+            var csrfToken = getCsrfToken();
             fetch('/m/assistant/chat', {
                 method: 'POST',
                 body: formData,
