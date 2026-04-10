@@ -1053,6 +1053,9 @@ async def _ws_handle_chat(
             previous_response_id = response_id
             is_new_session = False
 
+        # Commit all tool changes before closing
+        await db.commit()
+
         # Done
         await ws_send(ws, {
             "type": "done",
