@@ -1014,10 +1014,12 @@ async def _ws_handle_chat(
                     continue
 
                 # Execute tool
+                logger.info("[ASSISTANT WS] Executing tool %s with args: %s", tool_name, json.dumps(tool_args, default=str)[:500])
                 await ws_send(ws, {"type": "tool", "name": tool_name, "args": tool_args})
                 try:
                     result = await tool.execute(tool_args, request)
                     success = not result.get("error")
+                    logger.info("[ASSISTANT WS] Tool %s result: %s", tool_name, json.dumps(result, default=str)[:500])
 
                     # Log action
                     async with atomic(db) as session:
