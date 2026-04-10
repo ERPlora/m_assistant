@@ -861,6 +861,11 @@ async def _ws_handle_chat(
         setup_mode = context == "setup"
         available_tools = get_tools_for_user(user_permissions, setup_mode=setup_mode)
         tools_schema = tools_to_openai_schema(available_tools)
+        logger.info(
+            "[ASSISTANT WS] Registry=%d available=%d schema=%d perms=%s setup=%s",
+            len(TOOL_REGISTRY), len(available_tools), len(tools_schema),
+            user_permissions[:5], setup_mode,
+        )
 
         # Cloud config
         hub_config = await HubConfig.get_config(db, hub_id)
