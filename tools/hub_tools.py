@@ -57,15 +57,13 @@ class GetStoreConfig(AssistantTool):
         if not store:
             return {"error": "Store config not found"}
         return {
-            "business_name": store.business_name,
-            "business_address": getattr(store, "business_address", ""),
-            "vat_number": getattr(store, "vat_number", ""),
-            "phone": getattr(store, "phone", ""),
-            "email": getattr(store, "email", ""),
-            "website": getattr(store, "website", ""),
+            "business_name": getattr(store, "store_name", "") or "",
+            "business_address": getattr(store, "address", "") or "",
+            "vat_number": getattr(store, "tax_number", "") or "",
+            "phone": getattr(store, "phone", "") or "",
+            "email": getattr(store, "email", "") or "",
             "tax_rate": str(getattr(store, "tax_rate", 0)),
             "tax_included": getattr(store, "tax_included", False),
-            "is_configured": getattr(store, "is_configured", False),
         }
 
 
@@ -212,6 +210,17 @@ class UpdateStoreConfig(AssistantTool):
         "additionalProperties": False,
     }
 
+    # Map tool parameter names → DB column names
+    _FIELD_MAP = {
+        "business_name": "store_name",
+        "business_address": "address",
+        "vat_number": "tax_number",
+        "phone": "phone",
+        "email": "email",
+        "tax_rate": "tax_rate",
+        "tax_included": "tax_included",
+    }
+
     async def execute(self, args: dict, request: Any) -> dict:
         from app.apps.configuration.models import StoreConfig
         async with atomic(request.state.db) as session:
@@ -219,11 +228,11 @@ class UpdateStoreConfig(AssistantTool):
             if not store:
                 return {"error": "Store config not found"}
             updated = []
-            for field in ["business_name", "business_address", "vat_number", "phone", "email", "tax_rate", "tax_included"]:
-                value = args.get(field)
+            for param_name, db_field in self._FIELD_MAP.items():
+                value = args.get(param_name)
                 if value is not None:
-                    setattr(store, field, value)
-                    updated.append(field)
+                    setattr(store, db_field, value)
+                    updated.append(param_name)
         return {"success": True, "updated_fields": updated}
 
 
