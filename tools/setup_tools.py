@@ -14,7 +14,7 @@ from app.core.db.transactions import atomic
 class SetRegionalConfig(AssistantTool):
     name = "set_regional_config"
     description = "Set regional configuration: language, timezone, country code, currency"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     setup_only = True
     parameters = {
@@ -48,7 +48,7 @@ class SetRegionalConfig(AssistantTool):
 class SetBusinessInfo(AssistantTool):
     name = "set_business_info"
     description = "Set business information: name, address, VAT/tax ID"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     setup_only = True
     parameters = {
@@ -78,7 +78,7 @@ class SetBusinessInfo(AssistantTool):
 class SetTaxConfig(AssistantTool):
     name = "set_tax_config"
     description = "Set tax configuration: default tax rate and whether prices include tax"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     setup_only = True
     parameters = {
@@ -107,7 +107,7 @@ class SetTaxConfig(AssistantTool):
 class CompleteSetupStep(AssistantTool):
     name = "complete_setup_step"
     description = "Mark the hub setup as complete"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     setup_only = True
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}

@@ -195,21 +195,20 @@ class ListTaxClasses(AssistantTool):
 @register_tool
 class UpdateStoreConfig(AssistantTool):
     name = "update_store_config"
-    description = "Update store/business configuration"
-    requires_confirmation = True
+    description = "Update store/business configuration. Only include fields you want to change."
     required_permission = "assistant.use_chat"
     parameters = {
         "type": "object",
         "properties": {
-            "business_name": {"type": ["string", "null"], "description": "Business name"},
-            "business_address": {"type": ["string", "null"], "description": "Business address"},
-            "vat_number": {"type": ["string", "null"], "description": "VAT/Tax ID number"},
-            "phone": {"type": ["string", "null"], "description": "Phone number"},
-            "email": {"type": ["string", "null"], "description": "Email address"},
-            "tax_rate": {"type": ["number", "null"], "description": "Default tax rate percentage"},
-            "tax_included": {"type": ["boolean", "null"], "description": "Whether prices include tax"},
+            "business_name": {"type": "string", "description": "Business name"},
+            "business_address": {"type": "string", "description": "Business address"},
+            "vat_number": {"type": "string", "description": "VAT/Tax ID number (NIF/CIF)"},
+            "phone": {"type": "string", "description": "Phone number"},
+            "email": {"type": "string", "description": "Email address"},
+            "tax_rate": {"type": "number", "description": "Default tax rate percentage"},
+            "tax_included": {"type": "boolean", "description": "Whether prices include tax"},
         },
-        "required": ["business_name", "business_address", "vat_number", "phone", "email", "tax_rate", "tax_included"],
+        "required": [],
         "additionalProperties": False,
     }
 
@@ -232,7 +231,7 @@ class UpdateStoreConfig(AssistantTool):
 class SelectBlocks(AssistantTool):
     name = "select_blocks"
     description = "Select functional blocks for this hub"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     parameters = {
         "type": "object",
@@ -257,7 +256,7 @@ class SelectBlocks(AssistantTool):
 class CreateRole(AssistantTool):
     name = "create_role"
     description = "Create a custom role with specific permission wildcards"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     parameters = {
         "type": "object",
@@ -291,7 +290,7 @@ class CreateRole(AssistantTool):
 class CreateEmployee(AssistantTool):
     name = "create_employee"
     description = "Create a new local employee"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     parameters = {
         "type": "object",
@@ -324,7 +323,7 @@ class CreateEmployee(AssistantTool):
 class CreateTaxClass(AssistantTool):
     name = "create_tax_class"
     description = "Create a new tax class/rate (e.g., 'IVA General 21%', 'IGIC 7%')"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     parameters = {
         "type": "object",
@@ -436,7 +435,7 @@ class InstallModule(AssistantTool):
 class EnableModule(AssistantTool):
     name = "enable_module"
     description = "Enable/activate a module that is already installed but disabled"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     parameters = {
         "type": "object",
@@ -463,7 +462,7 @@ class EnableModule(AssistantTool):
 class DisableModule(AssistantTool):
     name = "disable_module"
     description = "Disable/deactivate a module on this hub via the ModuleRuntime"
-    requires_confirmation = True
+    # requires_confirmation removed — system prompt controls when to ask
     required_permission = "assistant.use_setup_mode"
     parameters = {
         "type": "object",
