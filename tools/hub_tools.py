@@ -437,6 +437,7 @@ class InstallModule(AssistantTool):
                     version=catalog_entry.version,
                     checksum=catalog_entry.checksum_sha256,
                 )
+                await db.commit()
                 if result.success:
                     return {"success": True, "message": f"Module {module_id} v{catalog_entry.version} installed and activated."}
                 return {"success": False, "error": result.error or "Installation failed."}
