@@ -223,7 +223,10 @@ class UpdateStoreConfig(AssistantTool):
 
     async def execute(self, args: dict, request: Any) -> dict:
         from app.apps.configuration.models import StoreConfig
-        async with atomic(request.state.db) as session:
+        from app.config.database import get_session_factory
+        factory = get_session_factory()
+        async with factory() as session:
+            session.info["hub_id"] = request.state.hub_id
             store = await StoreConfig.get_config(session, request.state.hub_id)
             if not store:
                 return {"error": "Store config not found"}
@@ -233,6 +236,7 @@ class UpdateStoreConfig(AssistantTool):
                 if value is not None:
                     setattr(store, db_field, value)
                     updated.append(param_name)
+            await session.commit()
         return {"success": True, "updated_fields": updated}
 
 
