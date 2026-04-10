@@ -436,7 +436,8 @@ async def _stream_agentic_loop(
                 continue
 
             # Permission check
-            if tool.required_permission and tool.required_permission not in user_permissions:
+            from app.core.security.permissions import has_permission as _has_perm
+            if tool.required_permission and not _has_perm(user_permissions, tool.required_permission):
                 tool_results.append({
                     "type": "function_call_output",
                     "call_id": call_id,
@@ -1005,7 +1006,8 @@ async def _ws_handle_chat(
                     continue
 
                 # Permission check
-                if tool.required_permission and tool.required_permission not in user_permissions:
+                from app.core.security.permissions import has_permission as _has_perm
+                if tool.required_permission and not _has_perm(user_permissions, tool.required_permission):
                     tool_results.append({
                         "type": "function_call_output",
                         "call_id": call_id,
