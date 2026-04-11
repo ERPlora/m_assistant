@@ -69,9 +69,13 @@ async def chat_page(
         .all()
     )
 
+    # Pass the latest conversation ID so the frontend continues the same thread
+    latest_conversation_id = str(conversations[0].id) if conversations else ""
+
     return {
         "conversations": conversations,
         "context": context,
+        "conversation_id": latest_conversation_id,
     }
 
 
@@ -647,7 +651,13 @@ async def _get_or_create_conversation(
     conversation_id: str,
     context: str,
 ) -> AssistantConversation:
-    """Get existing conversation or create a new one."""
+    """Get existing conversation or create a new one.
+
+    If conversation_id is provided, reuse it.
+    If empty, find the user's most recent conversation for this context.
+    Only creates a new one if none exists.
+    """
+    # 1. Explicit conversation_id — reuse it
     if conversation_id:
         try:
             query = HubQuery(AssistantConversation, db, hub_id)
@@ -657,6 +667,23 @@ async def _get_or_create_conversation(
         except (ValueError, Exception):
             pass
 
+    # 2. No conversation_id — find user's latest conversation for this context
+    from sqlalchemy import select as sa_select
+    result = await db.execute(
+        sa_select(AssistantConversation)
+        .where(
+            AssistantConversation.hub_id == hub_id,
+            AssistantConversation.created_by == user_id,
+            AssistantConversation.context == context,
+        )
+        .order_by(AssistantConversation.updated_at.desc())
+        .limit(1)
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        return existing
+
+    # 3. No existing conversation — create new
     async with atomic(db) as session:
         conversation = AssistantConversation(
             hub_id=hub_id,

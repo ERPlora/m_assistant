@@ -154,7 +154,7 @@
     function _registerAssistantChat() {
         Alpine.data('assistantChat', function() { return {
         loading: false,
-        conversationId: '',
+        conversationId: '{{ conversation_id|default("") }}',
         tierName: '',
         sessionsUsed: 0,
         sessionsLimit: 0,
