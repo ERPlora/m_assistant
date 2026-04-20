@@ -24,6 +24,5 @@ async def on_uninstall(session: AsyncSession, hub_id: UUID) -> None:
 
 
 async def on_upgrade(
-    session: AsyncSession, hub_id: UUID, from_version: str, to_version: str,
-) -> None:
+    session: AsyncSession, hub_id: UUID, from_version: str, to_version: str) -> None:
     pass

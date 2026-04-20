@@ -41,8 +41,7 @@ SUPPORTED_TYPES = {
 async def process_file(
     file_bytes: bytes,
     filename: str,
-    content_type: str,
-) -> list[dict[str, Any]]:
+    content_type: str) -> list[dict[str, Any]]:
     """
     Process an uploaded file and return multimodal content parts.
 

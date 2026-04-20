@@ -11,9 +11,9 @@ from typing import Any
 
 import httpx
 
-from app.ai.registry import AssistantTool, register_tool
-from app.core.db.query import HubQuery
-from app.core.db.transactions import atomic
+from apps.ai.registry import AssistantTool, register_tool
+from hotframe.models.queryset import HubQuery
+from hotframe.orm.transactions import atomic
 
 from ..config_state import get_primary_selected_block, get_selected_blocks, set_selected_blocks
 
@@ -30,7 +30,7 @@ class GetHubConfig(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import HubConfig
+        from apps.configuration.models import HubConfig
         config = await HubConfig.get_config(request.state.db, request.state.hub_id)
         if not config:
             return {"error": "Hub config not found"}
@@ -52,7 +52,7 @@ class GetStoreConfig(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import StoreConfig
+        from apps.configuration.models import StoreConfig
         store = await StoreConfig.get_config(request.state.db, request.state.hub_id)
         if not store:
             return {"error": "Store config not found"}
@@ -74,7 +74,7 @@ class ListAvailableBlocks(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import HubConfig
+        from apps.configuration.models import HubConfig
         config = await HubConfig.get_config(request.state.db, request.state.hub_id)
         cloud_url = getattr(config, "cloud_api_url", "https://erplora.com") if config else "https://erplora.com"
         try:
@@ -101,7 +101,7 @@ class GetSelectedBlocks(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import HubConfig
+        from apps.configuration.models import HubConfig
         config = await HubConfig.get_config(request.state.db, request.state.hub_id)
         if not config:
             return {"selected_blocks": [], "solution_slug": ""}
@@ -138,9 +138,9 @@ class ListRoles(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.accounts.models import Role
+        from apps.auth.models import Role
         query = HubQuery(Role, request.state.db, request.state.hub_id)
-        roles = await query.filter(Role.is_deleted == False, Role.is_active == True).order_by(Role.name).all()  # noqa: E712
+        roles = await query.filter(Role.is_active == True).order_by(Role.name).all()  # noqa: E712
         return {
             "roles": [
                 {"id": str(r.id), "name": r.name, "display_name": getattr(r, "display_name", r.name), "source": getattr(r, "source", "custom")}
@@ -156,9 +156,9 @@ class ListEmployees(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.accounts.models import LocalUser
+        from apps.auth.models import LocalUser
         query = HubQuery(LocalUser, request.state.db, request.state.hub_id)
-        users = await query.filter(LocalUser.is_deleted == False, LocalUser.is_active == True).order_by(LocalUser.name).all()  # noqa: E712
+        users = await query.filter(LocalUser.is_active == True).order_by(LocalUser.name).all()  # noqa: E712
         return {
             "employees": [
                 {"id": str(u.id), "name": u.name, "email": getattr(u, "email", ""), "role": getattr(u, "role", "")}
@@ -174,7 +174,7 @@ class ListTaxClasses(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import TaxClass
+        from apps.configuration.models import TaxClass
         query = HubQuery(TaxClass, request.state.db, request.state.hub_id)
         tax_classes = await query.filter(TaxClass.is_active == True).all()  # noqa: E712
         return {
@@ -222,8 +222,8 @@ class UpdateStoreConfig(AssistantTool):
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import StoreConfig
-        from app.config.database import get_session_factory
+        from apps.configuration.models import StoreConfig
+        from hotframe.config.database import get_session_factory
         factory = get_session_factory()
         async with factory() as session:
             session.info["hub_id"] = request.state.hub_id
@@ -256,7 +256,7 @@ class SelectBlocks(AssistantTool):
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import HubConfig
+        from apps.configuration.models import HubConfig
         async with atomic(request.state.db) as session:
             config = await HubConfig.get_config(session, request.state.hub_id)
             if not config:
@@ -284,7 +284,7 @@ class CreateRole(AssistantTool):
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.accounts.models import Role
+        from apps.auth.models import Role
         async with atomic(request.state.db) as session:
             role = Role(
                 hub_id=request.state.hub_id,
@@ -292,8 +292,7 @@ class CreateRole(AssistantTool):
                 display_name=args["display_name"],
                 description=args.get("description", ""),
                 source="custom",
-                is_system=False,
-            )
+                is_system=False)
             session.add(role)
             await session.flush()
             return {"success": True, "role_id": str(role.id), "name": role.name}
@@ -318,18 +317,24 @@ class CreateEmployee(AssistantTool):
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.accounts.models import LocalUser
+        from apps.auth.models import LocalUser, Role
+        from hotframe.auth.auth import hash_pin
         async with atomic(request.state.db) as session:
+            # Look up Role by name to get role_id
+            role_name = args.get("role_name", "employee")
+            role_query = HubQuery(Role, session, request.state.hub_id)
+            role_obj = await role_query.filter(Role.name == role_name, Role.is_active == True).first()  # noqa: E712
+            role_id = role_obj.id if role_obj else None
+
             user = LocalUser(
                 hub_id=request.state.hub_id,
                 name=args["name"],
                 email=args["email"],
-                role=args.get("role_name", "employee"),
-            )
-            user.set_pin(args["pin"])
+                pin_hash=hash_pin(args["pin"]),
+                role_id=role_id)
             session.add(user)
             await session.flush()
-            return {"success": True, "employee_id": str(user.id), "name": user.name}
+            return {"success": True, "employee_id": str(user.id), "name": user.name, "role": role_name}
 
 
 @register_tool
@@ -346,12 +351,12 @@ class CreateTaxClass(AssistantTool):
             "description": {"type": "string", "description": "Optional description"},
             "is_default": {"type": "boolean", "description": "Whether this is the default tax class"},
         },
-        "required": ["name", "rate", "description", "is_default"],
+        "required": ["name", "rate"],
         "additionalProperties": False,
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import TaxClass
+        from apps.configuration.models import TaxClass
         async with atomic(request.state.db) as session:
             if args.get("is_default"):
                 # Clear existing defaults
@@ -364,138 +369,16 @@ class CreateTaxClass(AssistantTool):
                 hub_id=request.state.hub_id,
                 name=args["name"],
                 rate=args["rate"],
-                description=args.get("description", ""),
-                is_default=args.get("is_default", False),
-            )
+                is_default=args.get("is_default", False))
             session.add(tc)
             await session.flush()
             return {"success": True, "tax_class_id": str(tc.id), "name": tc.name, "rate": str(tc.rate)}
 
 
-@register_tool
-class InstallModule(AssistantTool):
-    name = "install_module"
-    description = (
-        "Install a module from the marketplace catalog. Downloads from S3, "
-        "runs migrations, and activates it. Use this when a module is not yet installed."
-    )
-    requires_confirmation = False
-    required_permission = "assistant.use_setup_mode"
-    parameters = {
-        "type": "object",
-        "properties": {
-            "module_id": {
-                "type": "string",
-                "description": "Module ID to install (e.g., 'inventory', 'customers', 'sales', 'orders')",
-            },
-        },
-        "required": ["module_id"],
-        "additionalProperties": False,
-    }
-
-    async def execute(self, args: dict, request: Any) -> dict:
-        module_id = args["module_id"]
-        runtime = getattr(request.app.state, "module_runtime", None)
-        if not runtime:
-            return {"success": False, "error": "Module runtime not available"}
-
-        # Check if already installed
-        from app.config.database import get_session_factory
-        from app.modules.models import HubModule, HubModuleVersion
-        from sqlalchemy import select
-
-        factory = get_session_factory()
-        async with factory() as db:
-            db.info["hub_id"] = request.state.hub_id
-
-            # Already installed?
-            existing = await db.execute(
-                select(HubModule).where(
-                    HubModule.hub_id == request.state.hub_id,
-                    HubModule.module_id == module_id,
-                )
-            )
-            if existing.scalar_one_or_none():
-                return {"success": True, "message": f"Module {module_id} is already installed."}
-
-            # Find latest version in catalog
-            cat_result = await db.execute(
-                select(HubModuleVersion)
-                .where(HubModuleVersion.module_id == module_id)
-                .order_by(HubModuleVersion.released_at.desc())
-                .limit(1)
-            )
-            catalog_entry = cat_result.scalar_one_or_none()
-            if not catalog_entry:
-                return {"success": False, "error": f"Module {module_id} not found in catalog."}
-
-            try:
-                result = await runtime.install(
-                    session=db,
-                    hub_id=request.state.hub_id,
-                    module_id=module_id,
-                    version=catalog_entry.version,
-                    checksum=catalog_entry.checksum_sha256,
-                )
-                await db.commit()
-                if result.success:
-                    return {"success": True, "message": f"Module {module_id} v{catalog_entry.version} installed and activated."}
-                return {"success": False, "error": result.error or "Installation failed."}
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-
-
-@register_tool
-class EnableModule(AssistantTool):
-    name = "enable_module"
-    description = "Enable/activate a module that is already installed but disabled"
-    # requires_confirmation removed — system prompt controls when to ask
-    required_permission = "assistant.use_setup_mode"
-    parameters = {
-        "type": "object",
-        "properties": {
-            "module_id": {"type": "string", "description": "Module ID to enable (e.g., 'inventory', 'pos')"},
-        },
-        "required": ["module_id"],
-        "additionalProperties": False,
-    }
-
-    async def execute(self, args: dict, request: Any) -> dict:
-        module_id = args["module_id"]
-        runtime = getattr(request.app.state, "module_runtime", None)
-        if not runtime:
-            return {"success": False, "error": "Module runtime not available"}
-        try:
-            await runtime.activate(module_id, request.state.hub_id)
-            return {"success": True, "message": f"Module {module_id} enabled."}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-
-@register_tool
-class DisableModule(AssistantTool):
-    name = "disable_module"
-    description = "Disable/deactivate a module on this hub via the ModuleRuntime"
-    # requires_confirmation removed — system prompt controls when to ask
-    required_permission = "assistant.use_setup_mode"
-    parameters = {
-        "type": "object",
-        "properties": {
-            "module_id": {"type": "string", "description": "Module ID to disable"},
-        },
-        "required": ["module_id"],
-        "additionalProperties": False,
-    }
-
-    async def execute(self, args: dict, request: Any) -> dict:
-        module_id = args["module_id"]
-        if module_id == "assistant":
-            return {"success": False, "error": "Cannot disable the assistant module"}
-        runtime = getattr(request.app.state, "module_runtime", None)
-        if not runtime:
-            return {"success": False, "error": "Module runtime not available"}
-        try:
-            await runtime.deactivate(module_id, request.state.hub_id)
-            return {"success": True, "message": f"Module {module_id} disabled."}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+# InstallModule, EnableModule, DisableModule removed.
+# Module management is now handled by ModuleInstallerService in
+# app/apps/main/services.py (registered as _modules core service).
+# Use the generic execute() tool:
+#   execute(_modules, ModuleInstallerService, install, {"module_id": "customers"})
+#   execute(_modules, ModuleInstallerService, enable, {"module_id": "customers"})
+#   execute(_modules, ModuleInstallerService, disable, {"module_id": "customers"})

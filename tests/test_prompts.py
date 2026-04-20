@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from ..prompts import (
     build_system_prompt,
     _base_instructions,
+    _modules_context,
     _user_context,
     _store_context,
-    _modules_context,
     _setup_context,
     _safety_rules,
 )
@@ -107,8 +107,8 @@ class TestBuildSystemPrompt:
             business_name="Test Store", tax_rate=21, tax_included=True,
             vat_number="ES123", phone="", email="", website="", is_configured=True,
         )
-        with patch("app.apps.configuration.models.HubConfig.get_config", new_callable=AsyncMock, return_value=hub_config), \
-             patch("app.apps.configuration.models.StoreConfig.get_config", new_callable=AsyncMock, return_value=store_config):
+        with patch("apps.configuration.models.HubConfig.get_config", new_callable=AsyncMock, return_value=hub_config), \
+             patch("apps.configuration.models.StoreConfig.get_config", new_callable=AsyncMock, return_value=store_config):
             prompt = await build_system_prompt(mock_request, "general")
             assert "ERPlora" in prompt
             assert "Test Store" in prompt
@@ -126,8 +126,8 @@ class TestBuildSystemPrompt:
             business_name="", tax_rate=0, tax_included=False,
             vat_number="", phone="", email="", website="", is_configured=False,
         )
-        with patch("app.apps.configuration.models.HubConfig.get_config", new_callable=AsyncMock, return_value=hub_config), \
-             patch("app.apps.configuration.models.StoreConfig.get_config", new_callable=AsyncMock, return_value=store_config):
+        with patch("apps.configuration.models.HubConfig.get_config", new_callable=AsyncMock, return_value=hub_config), \
+             patch("apps.configuration.models.StoreConfig.get_config", new_callable=AsyncMock, return_value=store_config):
             prompt = await build_system_prompt(mock_request, "setup")
             assert "Setup Wizard" in prompt
             assert "PENDING" in prompt

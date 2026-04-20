@@ -13,7 +13,7 @@ from sqlalchemy import Boolean, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.db.base import HubBaseModel
+from apps.shared.models import HubModel as HubBaseModel
 
 
 class AssistantConversation(HubBaseModel):

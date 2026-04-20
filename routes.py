@@ -3,6 +3,12 @@ AI Assistant routes — FastAPI router.
 
 Handles chat page rendering, SSE streaming with agentic loop,
 and action confirmation. Mounted at /m/assistant/ by ModuleRuntime.
+
+V2 (Fase 3): The Hub WS handler can use either:
+  - _stream_via_ws()  — persistent WebSocket to Cloud (new, default)
+  - _stream_via_sse() — legacy one-shot SSE per turn (fallback, canary)
+
+Controlled by env var HUB_ASSISTANT_PROTOCOL=ws (default) | sse (rollback).
 """
 
 from __future__ import annotations
@@ -15,15 +21,18 @@ from typing import Any
 
 import httpx
 from cachetools import TTLCache
-from fastapi import APIRouter, Request, WebSocket
+from fastapi import APIRouter, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.ai.registry import TOOL_REGISTRY, get_tools_for_user, tools_to_openai_schema
-from app.core.db.query import HubQuery
-from app.core.db.transactions import atomic
-from app.core.dependencies import CurrentUser, DbSession, HubId
-from app.core.htmx import htmx_view
-from app.core.sse import sse_stream
+from apps.ai.registry import TOOL_REGISTRY, get_tools_for_user, tools_to_openai_schema
+
+# Import all tool sub-modules to trigger @register_tool decorators at load time.
+from . import tools as _tools_pkg  # noqa: F401
+from hotframe.models.queryset import HubQuery
+from hotframe.orm.transactions import atomic
+from hotframe import CurrentUser, DbSession
+from hotframe.views.responses import htmx_view
+from hotframe.views.responses import sse_stream
 
 from .models import AssistantActionLog, AssistantConversation
 from .prompts import build_system_prompt
@@ -35,11 +44,9 @@ router = APIRouter()
 MAX_TOOL_ITERATIONS = 10
 _stream_cache: TTLCache = TTLCache(maxsize=256, ttl=120)
 
-
 # ============================================================================
 # PAGE VIEWS
 # ============================================================================
-
 
 @router.get("/")
 @router.get("/chat")
@@ -48,10 +55,10 @@ async def chat_page(
     request: Request,
     db: DbSession,
     user: CurrentUser,
-    hub_id: HubId,
     context: str = "general",
-):
+    conversation_id: str | None = Query(None)):
     """Main chat page."""
+    hub_id = user.hub_id
     request.state.db = db
     request.state.hub_id = hub_id
     request.state.user_id = user.id if user else None
@@ -69,25 +76,31 @@ async def chat_page(
         .all()
     )
 
-    # Pass the latest conversation ID so the frontend continues the same thread
-    latest_conversation_id = str(conversations[0].id) if conversations else ""
+    # If a specific conversation_id was requested via query param, use it.
+    # Otherwise fall back to the most recent conversation.
+    # TODO(Bug2): Loading prior messages requires an AssistantMessage model
+    # (messages are currently stored only in the OpenAI Responses API, not
+    # locally). Until a local message store is added, only the conversation_id
+    # is restored — the message history is not rendered in the template.
+    if conversation_id:
+        resolved_conversation_id = conversation_id
+    else:
+        resolved_conversation_id = str(conversations[0].id) if conversations else ""
 
     return {
         "conversations": conversations,
         "context": context,
-        "conversation_id": latest_conversation_id,
+        "conversation_id": resolved_conversation_id,
     }
-
 
 @router.get("/history")
 @htmx_view(module_id="assistant", view_id="history")
 async def history_page(
     request: Request,
     db: DbSession,
-    user: CurrentUser,
-    hub_id: HubId,
-):
+    user: CurrentUser):
     """Conversation history page."""
+    hub_id = user.hub_id
     user_id = getattr(request.state, "user_id", None)
     query = HubQuery(AssistantConversation, db, hub_id)
     conversations = (
@@ -100,16 +113,14 @@ async def history_page(
 
     return {"conversations": conversations}
 
-
 @router.get("/logs")
 @htmx_view(module_id="assistant", view_id="logs")
 async def logs_page(
     request: Request,
     db: DbSession,
-    user: CurrentUser,
-    hub_id: HubId,
-):
+    user: CurrentUser):
     """Action log page."""
+    hub_id = user.hub_id
     user_id = getattr(request.state, "user_id", None)
     query = HubQuery(AssistantActionLog, db, hub_id)
     logs = (
@@ -122,21 +133,18 @@ async def logs_page(
 
     return {"logs": logs}
 
-
 # ============================================================================
 # CHAT API — SSE STREAMING
 # ============================================================================
-
 
 @router.post("/skip-setup")
 async def skip_setup(
     request: Request,
     db: DbSession,
-    user: CurrentUser,
-    hub_id: HubId,
-) -> JSONResponse:
+    user: CurrentUser) -> JSONResponse:
     """Skip the setup wizard and configure manually later."""
-    from app.apps.configuration.models import HubConfig, StoreConfig
+    hub_id = user.hub_id
+    from apps.configuration.models import HubConfig, StoreConfig
 
     async with atomic(db) as session:
         hub_config = await HubConfig.get_config(session, hub_id)
@@ -150,15 +158,13 @@ async def skip_setup(
 
     return JSONResponse({"success": True, "redirect_url": "/"})
 
-
 @router.post("/chat")
 async def chat(
     request: Request,
     db: DbSession,
-    user: CurrentUser,
-    hub_id: HubId,
-) -> JSONResponse:
+    user: CurrentUser) -> JSONResponse:
     """Initiate a chat message. Returns a request_id for SSE streaming."""
+    hub_id = user.hub_id
     # Expose db/hub_id on request.state for assistant tools
     request.state.db = db
     request.state.hub_id = hub_id
@@ -190,8 +196,7 @@ async def chat(
 
     # Get or create conversation
     conversation = await _get_or_create_conversation(
-        db, hub_id, user_id, conversation_id, context,
-    )
+        db, hub_id, user_id, conversation_id, context)
 
     # Generate a unique request ID for this stream
     request_id = uuid.uuid4().hex[:16]
@@ -211,16 +216,14 @@ async def chat(
         "conversation_id": str(conversation.id),
     })
 
-
 @router.get("/stream/{request_id}")
 async def chat_stream(
     request: Request,
     request_id: str,
     db: DbSession,
-    user: CurrentUser,
-    hub_id: HubId,
-):
+    user: CurrentUser):
     """SSE endpoint that runs the agentic loop and streams events."""
+    hub_id = user.hub_id
     # Store hub_id and user_id on request.state (these are simple values, safe across async)
     request.state.hub_id = hub_id
     request.state.user_id = user.id if user else None
@@ -235,22 +238,19 @@ async def chat_stream(
 
     return await sse_stream(
         request,
-        _stream_agentic_loop(req_data, request, hub_id),
-    )
-
+        _stream_agentic_loop(req_data, request, hub_id))
 
 async def _stream_agentic_loop(
     req_data: dict[str, Any],
     request: Request,
-    hub_id: uuid.UUID,
-) -> AsyncGenerator[dict[str, Any]]:
+    hub_id: uuid.UUID) -> AsyncGenerator[dict[str, Any]]:
     """Async generator that runs the agentic loop and yields SSE events.
 
     Creates its own DB session because FastAPI dependency-injected sessions
     are closed before the SSE generator starts executing.
     """
-    from app.apps.configuration.models import HubConfig
-    from app.config.database import get_session_factory
+    from apps.configuration.models import HubConfig
+    from hotframe.config.database import get_session_factory
 
     factory = get_session_factory()
     db = await factory().__aenter__()
@@ -290,8 +290,8 @@ async def _stream_agentic_loop(
             yield {"type": "error", "message": "Hub is not connected to Cloud."}
             return
         hub_jwt = hub_config.hub_jwt
-        from app.config.settings import get_settings as _get_settings
-        cloud_api_url = _get_settings().CLOUD_API_URL
+        from settings import settings
+        cloud_api_url = settings.CLOUD_API_URL
 
     # Build multimodal input when attachments are present
     if attachments:
@@ -319,6 +319,7 @@ async def _stream_agentic_loop(
 
         # Build payload
         payload: dict[str, Any] = {"input": openai_input, "instructions": instructions}
+        payload["conversation_id"] = conversation_id
         if tools_schema:
             payload["tools"] = tools_schema
         if previous_response_id:
@@ -328,7 +329,9 @@ async def _stream_agentic_loop(
 
         # Call Cloud streaming endpoint
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
+            ) as client:
                 async with client.stream(
                     "POST",
                     f"{cloud_api_url}/api/v1/hub/device/assistant/chat/stream/",
@@ -336,8 +339,7 @@ async def _stream_agentic_loop(
                     headers={
                         "Authorization": f"Bearer {hub_jwt}",
                         "Content-Type": "application/json",
-                    },
-                ) as cloud_response:
+                    }) as cloud_response:
                     if cloud_response.status_code != 200:
                         body = await cloud_response.aread()
                         error_msg = "AI service error"
@@ -370,12 +372,46 @@ async def _stream_agentic_loop(
                     response_data: dict | None = None
                     function_calls: list[dict] = []
                     cloud_error: str | None = None
+                    _html_guard_checked = False
 
                     async for line in cloud_response.aiter_lines():
                         if not line or not line.startswith("data: "):
+                            # HTML error pages arrive without "data: " prefix.
+                            # Check the very first non-empty line for HTML markers.
+                            if not _html_guard_checked and line and (
+                                line.startswith("<") or "<!DOCTYPE" in line or "<HTML" in line.upper()
+                            ):
+                                _html_guard_checked = True
+                                logger.error(
+                                    "[ASSISTANT] HTML error page received from Cloud (gateway timeout?): %s…",
+                                    line[:200])
+                                yield {
+                                    "type": "error",
+                                    "message": (
+                                        "El servicio tardó demasiado en responder. "
+                                        "Por favor, intenta de nuevo con una petición más corta."
+                                    ),
+                                }
+                                return
                             continue
 
+                        _html_guard_checked = True
                         data_str = line[6:]
+
+                        # Guard: if the payload after "data: " looks like HTML, reject it.
+                        if data_str.startswith(("<", "<!")):
+                            logger.error(
+                                "[ASSISTANT] HTML content in SSE data field: %s…", data_str[:200]
+                            )
+                            yield {
+                                "type": "error",
+                                "message": (
+                                    "El servicio tardó demasiado en responder. "
+                                    "Por favor, intenta de nuevo con una petición más corta."
+                                ),
+                            }
+                            return
+
                         if data_str == "[DONE]":
                             break
 
@@ -440,7 +476,7 @@ async def _stream_agentic_loop(
                 continue
 
             # Permission check
-            from app.core.security.permissions import has_permission as _has_perm
+            from hotframe.auth.permissions import has_permission as _has_perm
             if tool.required_permission and not _has_perm(user_permissions, tool.required_permission):
                 tool_results.append({
                     "type": "function_call_output",
@@ -461,8 +497,7 @@ async def _stream_agentic_loop(
                         tool_args=tool_args,
                         result={},
                         success=False,
-                        confirmed=False,
-                    )
+                        confirmed=False)
                     session.add(action_log)
                     await session.flush()
                     log_id = action_log.id
@@ -498,8 +533,7 @@ async def _stream_agentic_loop(
                             tool_args=tool_args,
                             result=result,
                             success=True,
-                            confirmed=True,
-                        )
+                            confirmed=True)
                         session.add(action_log)
                     tool_results.append({
                         "type": "function_call_output",
@@ -519,8 +553,7 @@ async def _stream_agentic_loop(
                             result={"error": str(e)},
                             success=False,
                             confirmed=True,
-                            error_message=str(e),
-                        )
+                            error_message=str(e))
                         session.add(action_log)
                     tool_results.append({
                         "type": "function_call_output",
@@ -532,8 +565,7 @@ async def _stream_agentic_loop(
         # If pending confirmation, emit HTML and stop
         if pending_confirmation:
             confirmation_html = _render_confirmation(
-                request, pending_confirmation,
-            )
+                request, pending_confirmation)
             yield {"type": "confirmation", "html": confirmation_html}
             # Send results back for one more LLM iteration before stopping
             openai_input = tool_results
@@ -559,25 +591,26 @@ async def _stream_agentic_loop(
         "[ASSISTANT] Stream completed: conversation=%s iterations=%d confirmation=%s",
         conversation.id,
         iteration + 1,
-        pending_confirmation is not None,
-    )
-
+        pending_confirmation is not None)
 
 # ============================================================================
 # CONFIRMATION ACTIONS
 # ============================================================================
-
 
 @router.post("/confirm/{log_id}")
 async def confirm_action(
     request: Request,
     log_id: str,
     db: DbSession,
-    user: CurrentUser,
-    hub_id: HubId,
-) -> HTMLResponse:
+    user: CurrentUser) -> HTMLResponse:
     """Confirm and execute a pending write action."""
-    user_id = getattr(request.state, "user_id", None)
+    hub_id = user.hub_id
+    # `user: CurrentUser` is injected by FastAPI, but request.state.user_id
+    # isn't populated by any middleware on this endpoint. Read the ID from
+    # the user dependency and publish it on state so downstream tools that
+    # check `request.state.user_id` (via _build_fake_request etc.) see it.
+    user_id = user.id if user else None
+    request.state.user_id = user_id
 
     query = HubQuery(AssistantActionLog, db, hub_id)
     action_log = await query.get(uuid.UUID(log_id))
@@ -613,17 +646,16 @@ async def confirm_action(
                 log.error_message = str(e)
         return HTMLResponse(_render_message(request, "system", f"Error executing action: {e!s}", error=True))
 
-
 @router.post("/cancel/{log_id}")
 async def cancel_action(
     request: Request,
     log_id: str,
     db: DbSession,
-    user: CurrentUser,
-    hub_id: HubId,
-) -> HTMLResponse:
+    user: CurrentUser) -> HTMLResponse:
     """Cancel a pending write action."""
-    user_id = getattr(request.state, "user_id", None)
+    hub_id = user.hub_id
+    user_id = user.id if user else None
+    request.state.user_id = user_id
 
     try:
         query = HubQuery(AssistantActionLog, db, hub_id)
@@ -638,19 +670,16 @@ async def cancel_action(
 
     return HTMLResponse(_render_message(request, "system", "Action cancelled."))
 
-
 # ============================================================================
 # HELPERS
 # ============================================================================
-
 
 async def _get_or_create_conversation(
     db: DbSession,
     hub_id: uuid.UUID,
     user_id: uuid.UUID | None,
     conversation_id: str,
-    context: str,
-) -> AssistantConversation:
+    context: str) -> AssistantConversation:
     """Get existing conversation or create a new one.
 
     If conversation_id is provided, reuse it.
@@ -674,8 +703,7 @@ async def _get_or_create_conversation(
         .where(
             AssistantConversation.hub_id == hub_id,
             AssistantConversation.created_by == user_id,
-            AssistantConversation.context == context,
-        )
+            AssistantConversation.context == context)
         .order_by(AssistantConversation.updated_at.desc())
         .limit(1)
     )
@@ -688,12 +716,10 @@ async def _get_or_create_conversation(
         conversation = AssistantConversation(
             hub_id=hub_id,
             created_by=user_id,
-            context=context,
-        )
+            context=context)
         session.add(conversation)
         await session.flush()
         return conversation
-
 
 def _render_confirmation(request: Request, data: dict) -> str:
     """Render confirmation HTML partial."""
@@ -703,9 +729,7 @@ def _render_confirmation(request: Request, data: dict) -> str:
         log_id=data["log_id"],
         tool_name=data["tool_name"],
         tool_args=data["tool_args"],
-        description=_format_confirmation_text(data["tool_name"], data["tool_args"]),
-    )
-
+        description=_format_confirmation_text(data["tool_name"], data["tool_args"]))
 
 def _render_message(
     request: Request,
@@ -713,13 +737,11 @@ def _render_message(
     content: str,
     *,
     success: bool = False,
-    error: bool = False,
-) -> str:
+    error: bool = False) -> str:
     """Render a single message HTML."""
     templates = request.app.state.templates
     tpl = templates.env.get_template("assistant/partials/message.html")
     return tpl.render(role=role, content=content, success=success, error=error)
-
 
 def _format_confirmation_text(tool_name: str, tool_args: dict) -> str:
     """Format a human-readable description of the pending action."""
@@ -782,11 +804,9 @@ def _format_confirmation_text(tool_name: str, tool_args: dict) -> str:
     args_str = ", ".join(f"{k}={v}" for k, v in tool_args.items() if v is not None)
     return f"{tool_name}({args_str})"
 
-
 # ============================================================================
 # WEBSOCKET CHAT
 # ============================================================================
-
 
 @router.websocket("/ws/chat")
 async def chat_ws(websocket: WebSocket):
@@ -801,19 +821,17 @@ async def chat_ws(websocket: WebSocket):
         Client → Server: {"type": "cancel", "log_id": "..."}
         Server → Client: {"type": "text_delta|tool|tool_result|confirmation|done|error", ...}
     """
-    from app.core.ws import ws_handler
+    from apps.shared.routing.websocket import ws_handler
 
     # Authenticate from session cookie (passed in WS upgrade request)
-    from app.config.settings import get_settings
-
-    settings = get_settings()
+    from settings import settings
     hub_id = settings.HUB_ID
     if hub_id is None:
         await websocket.close(code=4001, reason="Hub not configured")
         return
 
     # Resolve user from session cookie
-    from app.core.middleware.session import get_session_data
+    from hotframe.middleware.session import get_session_data
 
     session_data = get_session_data(websocket)
     user_id = session_data.get("user_id") if session_data else None
@@ -837,18 +855,16 @@ async def chat_ws(websocket: WebSocket):
 
     await ws_handler(websocket, on_message)
 
-
 async def _ws_handle_chat(
     ws: WebSocket,
     data: dict,
     hub_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> None:
+    user_id: uuid.UUID) -> None:
     """Handle a chat message over WebSocket — runs the full agentic loop."""
-    from app.apps.configuration.models import HubConfig
-    from app.config.database import get_session_factory
-    from app.config.settings import get_settings
-    from app.core.ws import ws_send
+    from apps.configuration.models import HubConfig
+    from hotframe.config.database import get_session_factory
+    from settings import settings
+    from apps.shared.routing.websocket import ws_send
 
     message = (data.get("message") or "").strip()
     conversation_id = data.get("conversation_id", "")
@@ -857,8 +873,6 @@ async def _ws_handle_chat(
     if not message:
         await ws_send(ws, {"type": "error", "message": "Empty message"})
         return
-
-    settings = get_settings()
     factory = get_session_factory()
 
     async with factory() as db:
@@ -868,7 +882,7 @@ async def _ws_handle_chat(
         request = _build_fake_request(db, hub_id, user_id, app=ws.app)
 
         # Load user info for system prompt (role, name)
-        from app.apps.accounts.models import LocalUser
+        from apps.auth.models import LocalUser
         from sqlalchemy import select as sa_select
         _user = (await db.execute(
             sa_select(LocalUser).where(LocalUser.id == user_id)
@@ -879,8 +893,7 @@ async def _ws_handle_chat(
 
         # Get or create conversation
         conversation = await _get_or_create_conversation(
-            db, hub_id, user_id, conversation_id, context,
-        )
+            db, hub_id, user_id, conversation_id, context)
         conversation_id = str(conversation.id)
 
         # Build system prompt and tools
@@ -892,8 +905,7 @@ async def _ws_handle_chat(
         logger.info(
             "[ASSISTANT WS] Registry=%d available=%d schema=%d perms=%s setup=%s",
             len(TOOL_REGISTRY), len(available_tools), len(tools_schema),
-            user_permissions[:5], setup_mode,
-        )
+            user_permissions[:5], setup_mode)
 
         # Cloud config
         hub_config = await HubConfig.get_config(db, hub_id)
@@ -909,10 +921,18 @@ async def _ws_handle_chat(
         is_new_session = not conversation.openai_response_id
         tier_info: dict | None = None
 
+        # Protocol selection: WS (V2) or SSE (V1 fallback for canary window).
+        use_ws_protocol = settings.ASSISTANT_PROTOCOL == "ws"
+        if use_ws_protocol:
+            logger.debug("[ASSISTANT WS] Using V2 WebSocket protocol to Cloud")
+        else:
+            logger.debug("[ASSISTANT WS] Using V1 SSE protocol to Cloud (fallback)")
+
         for iteration in range(MAX_TOOL_ITERATIONS):
             await ws_send(ws, {"type": "thinking", "iteration": iteration + 1})
 
             payload: dict[str, Any] = {"input": openai_input, "instructions": instructions}
+            payload["conversation_id"] = conversation_id
             if tools_schema:
                 payload["tools"] = tools_schema
             if previous_response_id:
@@ -920,74 +940,46 @@ async def _ws_handle_chat(
             if is_new_session and iteration == 0:
                 payload["new_session"] = True
 
-            # Call Cloud streaming endpoint
-            try:
-                async with httpx.AsyncClient(timeout=300.0) as client:
-                    async with client.stream(
-                        "POST",
-                        f"{cloud_api_url}/api/v1/hub/device/assistant/chat/stream/",
-                        json=payload,
-                        headers={
-                            "Authorization": f"Bearer {hub_jwt}",
-                            "Content-Type": "application/json",
-                        },
-                    ) as cloud_response:
-                        if cloud_response.status_code != 200:
-                            body = await cloud_response.aread()
-                            error_msg = "AI service error"
-                            try:
-                                error_data = json.loads(body)
-                                error_msg = error_data.get("error", body.decode()[:200])
-                            except Exception:
-                                error_msg = body.decode()[:200]
-                            if cloud_response.status_code == 403:
-                                error_msg = "AI Assistant subscription required."
-                            elif cloud_response.status_code == 429:
-                                error_msg = "Monthly usage limit reached."
-                            await ws_send(ws, {"type": "error", "message": error_msg})
-                            return
+            # --- Dispatch to transport layer ---
+            response_data: dict | None = None
+            function_calls: list[dict] = []
+            cloud_error: str | None = None
+            tier_info_update: dict | None = None
 
-                        # Extract tier info
-                        tier_header = cloud_response.headers.get("X-Assistant-Tier")
-                        usage_header = cloud_response.headers.get("X-Assistant-Usage")
-                        if tier_header:
-                            tier_info = {"tier": tier_header}
-                            if usage_header:
-                                try:
-                                    tier_info.update(json.loads(usage_header))
-                                except (json.JSONDecodeError, TypeError):
-                                    pass
+            if use_ws_protocol:
+                # V2: persistent WebSocket to Cloud
+                done = await _stream_via_ws(
+                    ws=ws,
+                    payload=payload,
+                    hub_jwt=hub_jwt,
+                    cloud_ws_url=settings.CLOUD_WS_URL,
+                    response_data_out=[],
+                    function_calls_out=function_calls,
+                    cloud_error_out=[],
+                    tier_info_out=[])
+                # Unpack mutable output containers
+                response_data = done["response_data"]
+                function_calls = done["function_calls"]
+                cloud_error = done["cloud_error"]
+                tier_info_update = done["tier_info"]
+            else:
+                # V1 legacy: one-shot SSE per turn
+                done = await _stream_via_sse(
+                    ws=ws,
+                    payload=payload,
+                    hub_jwt=hub_jwt,
+                    cloud_api_url=cloud_api_url)
+                response_data = done["response_data"]
+                function_calls = done["function_calls"]
+                cloud_error = done["cloud_error"]
+                tier_info_update = done["tier_info"]
 
-                        # Parse SSE from Cloud
-                        response_data: dict | None = None
-                        function_calls: list[dict] = []
-                        cloud_error: str | None = None
-
-                        async for line in cloud_response.aiter_lines():
-                            if not line or not line.startswith("data: "):
-                                continue
-                            data_str = line[6:]
-                            if data_str == "[DONE]":
-                                break
-                            try:
-                                event = json.loads(data_str)
-                            except json.JSONDecodeError:
-                                continue
-
-                            event_type = event.get("type", "")
-                            if event_type == "text_delta":
-                                await ws_send(ws, event)
-                            elif event_type == "function_call":
-                                function_calls.append(event)
-                            elif event_type == "response":
-                                response_data = event
-                            elif event_type == "error":
-                                cloud_error = event.get("message", "Unknown AI error")
-
-            except httpx.HTTPError as e:
-                logger.error("[ASSISTANT WS] Cloud stream error: %s", e)
-                await ws_send(ws, {"type": "error", "message": f"AI service connection error: {e!s}"})
+            if done.get("fatal"):
+                # _stream_via_* already sent the error to the browser WS.
                 return
+
+            if tier_info_update:
+                tier_info = tier_info_update
 
             if cloud_error:
                 await ws_send(ws, {"type": "error", "message": cloud_error})
@@ -1015,6 +1007,7 @@ async def _ws_handle_chat(
 
             # Execute tool calls
             tool_results: list[dict] = []
+            pending_any: bool = False
             for fc in function_calls:
                 tool_name = fc.get("name", "")
                 call_id = fc.get("call_id", "")
@@ -1033,13 +1026,50 @@ async def _ws_handle_chat(
                     continue
 
                 # Permission check
-                from app.core.security.permissions import has_permission as _has_perm
+                from hotframe.auth.permissions import has_permission as _has_perm
                 if tool.required_permission and not _has_perm(user_permissions, tool.required_permission):
                     tool_results.append({
                         "type": "function_call_output",
                         "call_id": call_id,
                         "output": json.dumps({"error": f"Permission denied: {tool.required_permission}"}),
                     })
+                    continue
+
+                # Confirmation check
+                if tool.requires_confirmation:
+                    async with atomic(db) as session:
+                        action_log = AssistantActionLog(
+                            hub_id=hub_id,
+                            created_by=user_id,
+                            conversation_id=conversation.id,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            result={},
+                            success=False,
+                            confirmed=False)
+                        session.add(action_log)
+                        await session.flush()
+                        log_id = action_log.id
+
+                    confirmation_html = _render_confirmation(request, {
+                        "log_id": str(log_id),
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_description": tool.description,
+                    })
+                    await ws_send(ws, {"type": "confirmation", "html": confirmation_html})
+                    logger.info("[ASSISTANT WS] Confirmation required for tool %s (log_id=%s)", tool_name, log_id)
+
+                    tool_results.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps({
+                            "status": "pending_confirmation",
+                            "message": f"Action '{tool_name}' requires user confirmation.",
+                            "action_id": str(log_id),
+                        }),
+                    })
+                    pending_any = True
                     continue
 
                 # Execute tool
@@ -1060,8 +1090,7 @@ async def _ws_handle_chat(
                             tool_args=tool_args,
                             result=result,
                             success=success,
-                            confirmed=True,
-                        ))
+                            confirmed=True))
 
                     tool_results.append({
                         "type": "function_call_output",
@@ -1078,6 +1107,11 @@ async def _ws_handle_chat(
                         "output": json.dumps({"error": str(exc)}),
                     })
                     await ws_send(ws, {"type": "tool_result", "name": tool_name, "success": False})
+
+            # If any tool required confirmation, stop the agentic loop — wait for user.
+            if pending_any:
+                logger.info("[ASSISTANT WS] Agentic loop paused — awaiting user confirmation")
+                break
 
             # Send tool results back for next iteration
             openai_input = tool_results
@@ -1096,16 +1130,223 @@ async def _ws_handle_chat(
 
         logger.info(
             "[ASSISTANT WS] Chat completed: conversation=%s",
-            conversation_id,
-        )
+            conversation_id)
 
+# ============================================================================
+# TRANSPORT HELPERS — V2 WebSocket + V1 SSE (fallback)
+# ============================================================================
+
+async def _stream_via_ws(
+    *,
+    ws: WebSocket,
+    payload: dict[str, Any],
+    hub_jwt: str,
+    cloud_ws_url: str,
+    # mutable output containers (unused — kept for API symmetry with SSE helper)
+    response_data_out: list,
+    function_calls_out: list,
+    cloud_error_out: list,
+    tier_info_out: list) -> dict[str, Any]:
+    """Call Cloud via WebSocket (V2) for a single agentic-loop iteration.
+
+    Sends ``payload`` as ``{type: "chat_turn", ...}``, relays ``text_delta``
+    events to the browser WS in real time, and collects ``function_call`` /
+    ``response`` / ``error`` events.
+
+    Returns a dict::
+
+        {
+            "response_data": dict | None,
+            "function_calls": list[dict],
+            "cloud_error": str | None,
+            "tier_info": dict | None,
+            "fatal": bool,   # True if we already sent the error to browser
+        }
+    """
+    from apps.shared.routing.websocket import ws_send
+    from .cloud_ws import stream_turn_via_ws
+
+    result: dict[str, Any] = {
+        "response_data": None,
+        "function_calls": [],
+        "cloud_error": None,
+        "tier_info": None,
+        "fatal": False,
+    }
+
+    ws_payload = {"type": "chat_turn", **payload}
+
+    try:
+        async for event in stream_turn_via_ws(
+            cloud_ws_url=cloud_ws_url,
+            hub_jwt=hub_jwt,
+            payload=ws_payload):
+            event_type = event.get("type", "")
+
+            if event_type == "text_delta":
+                await ws_send(ws, event)
+
+            elif event_type == "function_call":
+                result["function_calls"].append(event)
+
+            elif event_type == "response":
+                result["response_data"] = event
+                # Tier info may be embedded in the response event
+                if "tier" in event:
+                    result["tier_info"] = {"tier": event["tier"]}
+
+            elif event_type == "error":
+                code = event.get("code", "")
+                msg = event.get("message", "Unknown AI error")
+                if code == "quota_exceeded":
+                    msg = "Monthly usage limit reached."
+                elif code == "subscription_required":
+                    msg = "AI Assistant subscription required."
+                result["cloud_error"] = msg
+
+            elif event_type == "done":
+                # Cloud signals end of turn — may carry token/cost metadata
+                result["response_data"] = result["response_data"] or event
+
+    except Exception as exc:
+        logger.error("[ASSISTANT WS] Cloud WebSocket stream error: %s", exc)
+        await ws_send(ws, {"type": "error", "message": f"AI service connection error: {exc!s}"})
+        result["fatal"] = True
+
+    return result
+
+async def _stream_via_sse(
+    *,
+    ws: WebSocket,
+    payload: dict[str, Any],
+    hub_jwt: str,
+    cloud_api_url: str) -> dict[str, Any]:
+    """Call Cloud via SSE (V1 legacy) for a single agentic-loop iteration.
+
+    Preserved for canary-window rollback. Controlled by
+    ``HUB_ASSISTANT_PROTOCOL=sse``.
+
+    Returns same structure as _stream_via_ws().
+    """
+    from apps.shared.routing.websocket import ws_send
+
+    result: dict[str, Any] = {
+        "response_data": None,
+        "function_calls": [],
+        "cloud_error": None,
+        "tier_info": None,
+        "fatal": False,
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
+        ) as client:
+            async with client.stream(
+                "POST",
+                f"{cloud_api_url}/api/v1/hub/device/assistant/chat/stream/",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {hub_jwt}",
+                    "Content-Type": "application/json",
+                }) as cloud_response:
+                if cloud_response.status_code != 200:
+                    body = await cloud_response.aread()
+                    error_msg = "AI service error"
+                    try:
+                        error_data = json.loads(body)
+                        error_msg = error_data.get("error", body.decode()[:200])
+                    except Exception:
+                        error_msg = body.decode()[:200]
+                    if cloud_response.status_code == 403:
+                        error_msg = "AI Assistant subscription required."
+                    elif cloud_response.status_code == 429:
+                        error_msg = "Monthly usage limit reached."
+                    await ws_send(ws, {"type": "error", "message": error_msg})
+                    result["fatal"] = True
+                    return result
+
+                # Extract tier info from response headers
+                tier_header = cloud_response.headers.get("X-Assistant-Tier")
+                usage_header = cloud_response.headers.get("X-Assistant-Usage")
+                if tier_header:
+                    result["tier_info"] = {"tier": tier_header}
+                    if usage_header:
+                        try:
+                            result["tier_info"].update(json.loads(usage_header))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                _html_guard_checked = False
+
+                async for line in cloud_response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        # HTML error pages arrive without "data: " prefix.
+                        if not _html_guard_checked and line and (
+                            line.startswith("<") or "<!DOCTYPE" in line or "<HTML" in line.upper()
+                        ):
+                            _html_guard_checked = True
+                            logger.error(
+                                "[ASSISTANT WS] HTML error page from Cloud (gateway timeout?): %s…",
+                                line[:200])
+                            await ws_send(ws, {
+                                "type": "error",
+                                "message": (
+                                    "El servicio tardó demasiado en responder. "
+                                    "Por favor, intenta de nuevo con una petición más corta."
+                                ),
+                            })
+                            result["fatal"] = True
+                            return result
+                        continue
+
+                    _html_guard_checked = True
+                    data_str = line[6:]
+
+                    if data_str.startswith(("<", "<!")):
+                        logger.error(
+                            "[ASSISTANT WS] HTML content in SSE data field: %s…", data_str[:200]
+                        )
+                        await ws_send(ws, {
+                            "type": "error",
+                            "message": (
+                                "El servicio tardó demasiado en responder. "
+                                "Por favor, intenta de nuevo con una petición más corta."
+                            ),
+                        })
+                        result["fatal"] = True
+                        return result
+
+                    if data_str == "[DONE]":
+                        break
+
+                    try:
+                        event = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    event_type = event.get("type", "")
+                    if event_type == "text_delta":
+                        await ws_send(ws, event)
+                    elif event_type == "function_call":
+                        result["function_calls"].append(event)
+                    elif event_type == "response":
+                        result["response_data"] = event
+                    elif event_type == "error":
+                        result["cloud_error"] = event.get("message", "Unknown AI error")
+
+    except httpx.HTTPError as exc:
+        logger.error("[ASSISTANT WS] Cloud SSE stream error: %s", exc)
+        await ws_send(ws, {"type": "error", "message": f"AI service connection error: {exc!s}"})
+        result["fatal"] = True
+
+    return result
 
 async def _ws_handle_confirm(
-    ws: WebSocket, data: dict, hub_id: uuid.UUID, user_id: uuid.UUID,
-) -> None:
+    ws: WebSocket, data: dict, hub_id: uuid.UUID, user_id: uuid.UUID) -> None:
     """Handle confirmation of a pending action over WebSocket."""
-    from app.config.database import get_session_factory
-    from app.core.ws import ws_send
+    from hotframe.config.database import get_session_factory
+    from apps.shared.routing.websocket import ws_send
 
     log_id = data.get("log_id", "")
     if not log_id:
@@ -1144,13 +1385,11 @@ async def _ws_handle_confirm(
                 log.error_message = str(exc)
                 await ws_send(ws, {"type": "error", "message": f"Tool execution failed: {exc}"})
 
-
 async def _ws_handle_cancel(
-    ws: WebSocket, data: dict, hub_id: uuid.UUID, user_id: uuid.UUID,
-) -> None:
+    ws: WebSocket, data: dict, hub_id: uuid.UUID, user_id: uuid.UUID) -> None:
     """Handle cancellation of a pending action over WebSocket."""
-    from app.config.database import get_session_factory
-    from app.core.ws import ws_send
+    from hotframe.config.database import get_session_factory
+    from apps.shared.routing.websocket import ws_send
 
     log_id = data.get("log_id", "")
     if not log_id:
@@ -1165,7 +1404,6 @@ async def _ws_handle_cancel(
             if log:
                 await session.delete(log)
         await ws_send(ws, {"type": "cancelled", "log_id": log_id})
-
 
 def _build_fake_request(db, hub_id, user_id, app=None):
     """Build a minimal Request-like object for tools that access request.state/app."""

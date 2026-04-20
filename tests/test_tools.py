@@ -1,6 +1,6 @@
 """Tests for tool registry integration."""
 
-from app.ai.registry import (
+from apps.ai.registry import (
     AssistantTool,
     TOOL_REGISTRY,
     register_tool,
@@ -24,6 +24,11 @@ class TestToolRegistry:
         assert "list_roles" in TOOL_REGISTRY
         assert "list_employees" in TOOL_REGISTRY
         assert "update_store_config" in TOOL_REGISTRY
+
+        # install_module, enable_module, disable_module removed — now in _modules service
+        assert "install_module" not in TOOL_REGISTRY
+        assert "enable_module" not in TOOL_REGISTRY
+        assert "disable_module" not in TOOL_REGISTRY
 
     def test_setup_tools_registered(self):
         from ..tools import setup_tools  # noqa: F401
@@ -61,8 +66,9 @@ class TestToolRegistry:
 
     def test_confirmation_flag(self):
         from ..tools import hub_tools  # noqa: F401
+        # requires_confirmation removed from all tools — system prompt controls this
         assert TOOL_REGISTRY["get_hub_config"].requires_confirmation is False
-        assert TOOL_REGISTRY["update_store_config"].requires_confirmation is True
+        assert TOOL_REGISTRY["update_store_config"].requires_confirmation is False
 
     def test_permission_requirements(self):
         from ..tools import hub_tools  # noqa: F401

@@ -1,56 +1,82 @@
-"""
-Alembic environment for the assistant module.
+"""Alembic migration environment for assistant."""
+# ruff: noqa: E402
+import sys
+from pathlib import Path
 
-Uses per-module version table: alembic_assistant.
-Migrations are hand-written (op.create_table), so no model imports needed.
-"""
-
-from __future__ import annotations
-
-from logging.config import fileConfig
+# Ensure project root is in sys.path so app/module imports work
+# env.py lives at apps/assistant/migrations/env.py → parents[3] = project root
+_HUB_ROOT = Path(__file__).resolve().parents[3]
+for p in (_HUB_ROOT, _HUB_ROOT / "modules"):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+# Import Base so Alembic sees the models
+from hotframe.models.base import Base  # noqa: F401
+
+# Import this module's models with the SAME dotted name the runtime
+# uses (`assistant.models`). Never fall back to `modules.assistant.models`
+# -- that would create a duplicate registration on Base.metadata.
+import importlib
+importlib.import_module("assistant.models")
+
+target_metadata = Base.metadata
 config = context.config
-
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
-
-# No target_metadata needed — migrations use explicit op.create_table()
-target_metadata = None
-
-# Per-module version table
-VERSION_TABLE = "alembic_assistant"
+_MODULE_VERSION_TABLE = config.attributes.get("version_table") or "alembic_assistant"
 
 
-def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode (generate SQL)."""
-    url = config.get_main_option("sqlalchemy.url")
+def run_migrations_offline():
+    url = _to_sync_url(config.get_main_option("sqlalchemy.url"))
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
-        version_table=VERSION_TABLE,
+        compare_type=True,
+        render_as_batch=True,
+    
+        version_table=_MODULE_VERSION_TABLE,
+
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode (execute against DB)."""
-    connectable = context.config.attributes.get("connection", None)
-    if connectable is None:
-        connectable = create_engine(
-            config.get_main_option("sqlalchemy.url"),
-            poolclass=pool.NullPool,
-        )
+def _to_sync_url(url):
+    """Convert async DB URL to sync for Alembic."""
+    return url.replace("+asyncpg", "").replace("+aiosqlite", "")
 
-    with connectable.connect() as connection:
+
+def run_migrations_online():
+    # Check if a connection was passed (from ModuleMigrationRunner)
+    connectable = config.attributes.get("connection")
+    if connectable is None:
+        url = _to_sync_url(config.get_main_option("sqlalchemy.url"))
+        connectable = create_engine(url, poolclass=pool.NullPool)
+
+    if hasattr(connectable, "connect"):
+        with connectable.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+                render_as_batch=True,
+            
+                version_table=_MODULE_VERSION_TABLE,
+
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+    else:
         context.configure(
-            connection=connection,
+            connection=connectable,
             target_metadata=target_metadata,
-            version_table=VERSION_TABLE,
+            compare_type=True,
+            render_as_batch=True,
+        
+            version_table=_MODULE_VERSION_TABLE,
+
         )
         with context.begin_transaction():
             context.run_migrations()

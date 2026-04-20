@@ -1,152 +1,159 @@
 <div x-data="assistantChat" class="flex flex-col h-full" style="min-height: calc(100vh - 180px);">
-    <!-- Tier badge -->
-    <div x-show="tierName" x-cloak
-         class="flex items-center justify-between px-4 py-2 border-b border-base-200 text-xs">
-        <span class="badge badge-sm" x-text="tierName"></span>
-        <span x-show="sessionsLimit > 0" class="opacity-60">
-            <span x-text="sessionsUsed"></span> / <span x-text="sessionsLimit"></span> {{ _("sessions") }}
-        </span>
-    </div>
 
-    <!-- Chat header -->
-    <div class="flex items-center justify-between px-4 py-2 border-b border-base-200">
-        <div class="flex items-center gap-2">
-            <button @click="newChat()" class="btn btn-ghost btn-sm gap-1">
-                {{ icon("add-outline", css_class="text-base") }}
-                {{ _("New Chat") }}
-            </button>
-            {% if context == "setup" %}
-            <button @click="skipSetup()"
-                    class="btn btn-ghost btn-sm gap-1"
-                    :disabled="loading || skippingSetup">
-                <span x-show="!skippingSetup" class="inline-flex items-center gap-1">
-                    {{ icon("arrow-forward-outline", css_class="text-base") }}
-                    {{ _("Skip Setup") }}
-                </span>
-                <span x-show="skippingSetup" class="inline-flex items-center gap-1">
-                    <span class="loading loading-xs"></span>
-                    {{ _("Skipping...") }}
-                </span>
-            </button>
-            {% endif %}
+    <!-- ── CHAT PANEL ─────────────────────────────────────────────── -->
+    <div class="flex flex-col flex-1" style="min-height:0">
+
+        <!-- Tier badge -->
+        <div x-show="tierName" x-cloak
+             class="flex items-center justify-between px-4 py-2 border-b border-base-200 text-xs">
+            <span class="badge badge-sm" x-text="tierName"></span>
+            <span x-show="sessionsLimit > 0" class="opacity-60">
+                <span x-text="sessionsUsed"></span> / <span x-text="sessionsLimit"></span> {{ _("sessions") }}
+            </span>
         </div>
-        <button @click="showHelp = !showHelp" class="btn btn-ghost btn-sm">
-            {{ icon("help-circle-outline", css_class="text-base") }}
-        </button>
-    </div>
 
-    <!-- Chat messages area -->
-    <div id="chat-messages"
-         class="flex-1 overflow-y-auto p-4 flex flex-col gap-3"
-         x-ref="messages">
-        <div class="chat-message chat-assistant" x-show="showHelp || !conversationId" x-cloak>
-            <div class="chat-bubble">
-                <p>{{ _("Hello! I'm your AI assistant. I can help you configure your hub, manage modules, create products, employees, and more.") }}</p>
-                <p class="mt-2 text-sm opacity-75">{{ _("Try asking me something like:") }}</p>
-                <ul class="mt-1 text-sm opacity-75 list-disc pl-4">
-                    <li>{{ _("What modules are available?") }}</li>
-                    <li>{{ _("Show me the current configuration") }}</li>
-                    <li>{{ _("Create an employee named Juan with manager role") }}</li>
-                </ul>
-                <p class="mt-3 text-sm">
-                    <a href="https://erplora.com/industries/" target="_blank" rel="noopener"
-                       class="text-primary hover:underline inline-flex items-center gap-1">
-                        {{ icon("open-outline", css_class="text-xs") }}
-                        {{ _("See business type examples for setup prompts") }}
-                    </a>
-                </p>
+        <!-- Chat header -->
+        <div class="flex items-center justify-between px-4 py-2 border-b border-base-200">
+            <div class="flex items-center gap-2">
+                <button @click="newChat()" class="btn btn-ghost btn-sm gap-1">
+                    {{ icon("add-outline", css_class="text-base") }}
+                    {{ _("New Chat") }}
+                </button>
                 {% if context == "setup" %}
-                <div class="mt-3 pt-3 border-t border-base-300">
-                    <p class="text-sm opacity-75 mb-2">{{ _("Describe your business and I'll configure everything automatically. Or skip setup if you want to configure manually.") }}</p>
-                    <button type="button"
-                            @click="skipSetup()"
-                            class="btn btn-ghost btn-sm gap-1"
-                            :disabled="loading || skippingSetup">
-                        <span x-show="!skippingSetup" class="inline-flex items-center gap-1">
-                            {{ icon("arrow-forward-outline", css_class="text-base") }}
-                            {{ _("Skip setup") }}
-                        </span>
-                        <span x-show="skippingSetup" class="inline-flex items-center gap-1">
-                            <span class="loading loading-xs"></span>
-                            {{ _("Skipping...") }}
-                        </span>
-                    </button>
-                </div>
+                <button @click="skipSetup()"
+                        class="btn btn-ghost btn-sm gap-1"
+                        :disabled="loading || skippingSetup">
+                    <span x-show="!skippingSetup" class="inline-flex items-center gap-1">
+                        {{ icon("arrow-forward-outline", css_class="text-base") }}
+                        {{ _("Skip Setup") }}
+                    </span>
+                    <span x-show="skippingSetup" class="inline-flex items-center gap-1">
+                        <span class="loading loading-xs"></span>
+                        {{ _("Skipping...") }}
+                    </span>
+                </button>
                 {% endif %}
             </div>
+            <button @click="showHelp = !showHelp" class="btn btn-ghost btn-sm">
+                {{ icon("help-circle-outline", css_class="text-base") }}
+            </button>
         </div>
-    </div>
 
-    <!-- File preview strip -->
-    <div x-show="selectedFiles.length > 0" x-cloak
-         class="px-4 py-2 border-t border-base-200 flex gap-2 flex-wrap">
-        <template x-for="(file, index) in selectedFiles" :key="index">
-            <div class="flex items-center gap-1 px-2 py-1 rounded-lg bg-base-200 text-sm">
-                <span x-text="file.name" class="truncate max-w-32"></span>
-                <span class="opacity-50 text-xs" x-text="formatFileSize(file.size)"></span>
-                <button type="button" @click="removeFile(index)" class="opacity-50 hover:opacity-100">
-                    {{ icon("close-outline", css_class="text-xs") }}
-                </button>
+        <!-- Chat messages area -->
+        <div id="chat-messages"
+             class="flex-1 overflow-y-auto p-4 flex flex-col gap-3"
+             x-ref="messages">
+            <div class="chat-message chat-assistant" x-show="showHelp || !conversationId" x-cloak>
+                <div class="chat-bubble">
+                    <p>{{ _("Hello! I'm your AI assistant. I can help you configure your hub, manage modules, create products, employees, and more.") }}</p>
+                    <p class="mt-2 text-sm opacity-75">{{ _("Try asking me something like:") }}</p>
+                    <ul class="mt-1 text-sm opacity-75 list-disc pl-4">
+                        <li>{{ _("What modules are available?") }}</li>
+                        <li>{{ _("Show me the current configuration") }}</li>
+                        <li>{{ _("Create an employee named Juan with manager role") }}</li>
+                    </ul>
+                    <p class="mt-3 text-sm">
+                        <a href="https://erplora.com/industries/" target="_blank" rel="noopener"
+                           class="text-primary hover:underline inline-flex items-center gap-1">
+                            {{ icon("open-outline", css_class="text-xs") }}
+                            {{ _("See business type examples for setup prompts") }}
+                        </a>
+                    </p>
+                    {% if context == "setup" %}
+                    <div class="mt-3 pt-3 border-t border-base-300">
+                        <p class="text-sm opacity-75 mb-2">{{ _("Describe your business and I'll configure everything automatically. Or skip setup if you want to configure manually.") }}</p>
+                        <button type="button"
+                                @click="skipSetup()"
+                                class="btn btn-ghost btn-sm gap-1"
+                                :disabled="loading || skippingSetup">
+                            <span x-show="!skippingSetup" class="inline-flex items-center gap-1">
+                                {{ icon("arrow-forward-outline", css_class="text-base") }}
+                                {{ _("Skip setup") }}
+                            </span>
+                            <span x-show="skippingSetup" class="inline-flex items-center gap-1">
+                                <span class="loading loading-xs"></span>
+                                {{ _("Skipping...") }}
+                            </span>
+                        </button>
+                    </div>
+                    {% endif %}
+                </div>
             </div>
-        </template>
-    </div>
+        </div>
 
-    <!-- Input area -->
-    <div class="p-4 border-t border-base-200">
-        <form @submit.prevent="sendMessage" x-ref="chatForm">
-            {{ csrf_input() }}
-            <input type="hidden" name="conversation_id" :value="conversationId">
-            <input type="hidden" name="context" value="{{ context|default('general') }}">
+        <!-- File preview strip -->
+        <div x-show="selectedFiles.length > 0" x-cloak
+             class="px-4 py-2 border-t border-base-200 flex gap-2 flex-wrap">
+            <template x-for="(file, index) in selectedFiles" :key="index">
+                <div class="flex items-center gap-1 px-2 py-1 rounded-lg bg-base-200 text-sm">
+                    <span x-text="file.name" class="truncate max-w-32"></span>
+                    <span class="opacity-50 text-xs" x-text="formatFileSize(file.size)"></span>
+                    <button type="button" @click="removeFile(index)" class="opacity-50 hover:opacity-100">
+                        {{ icon("close-outline", css_class="text-xs") }}
+                    </button>
+                </div>
+            </template>
+        </div>
 
-            <div class="flex gap-2 items-end">
-                <textarea
-                    name="message"
-                    x-ref="messageInput"
-                    class="input flex-1"
-                    rows="1"
-                    :placeholder="recording ? '{{ _("Listening...") }}' : (loading ? '{{ _("Thinking...") }}' : '{{ _("Type or speak a message, or attach a file...") }}')"
-                    :disabled="loading"
-                    @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
-                    @input="autoResize($el)"
-                    style="resize: none; max-height: 120px;"></textarea>
-                <input type="file"
-                       x-ref="fileInput"
-                       @change="onFileSelected($event)"
-                       multiple
-                       accept="image/*,.pdf,.txt,.csv,.xlsx,.docx"
-                       class="hidden" />
-                <button type="button"
-                        @click="$refs.fileInput.click()"
-                        class="btn btn-ghost"
-                        :disabled="loading">
-                    {{ icon("attach-outline") }}
-                </button>
-                <button type="button"
-                        x-show="speechSupported"
-                        @click="toggleVoice()"
-                        class="btn"
-                        :class="recording ? 'color-error' : 'btn-ghost'"
-                        :disabled="loading">
-                    <template x-if="!recording">
-                        <span>{{ icon("mic-outline") }}</span>
-                    </template>
-                    <template x-if="recording">
-                        <span>{{ icon("stop-outline") }}</span>
-                    </template>
-                </button>
-                <button type="submit"
-                        class="btn color-primary"
-                        :disabled="loading">
-                    <template x-if="!loading">
-                        <span>{{ icon("send-outline") }}</span>
-                    </template>
-                    <template x-if="loading">
-                        <span class="loading loading-sm"></span>
-                    </template>
-                </button>
-            </div>
-        </form>
-    </div>
+        <!-- Input area -->
+        <div class="p-4 border-t border-base-200">
+            <form @submit.prevent="sendMessage" x-ref="chatForm" method="post" action="javascript:void(0)">
+                {{ csrf_input() }}
+                <input type="hidden" name="conversation_id" :value="conversationId">
+                <input type="hidden" name="context" value="{{ context|default('general') }}">
+
+                <div class="flex gap-2 items-end">
+                    <textarea
+                        name="message"
+                        x-ref="messageInput"
+                        class="input flex-1"
+                        rows="1"
+                        :placeholder="recording ? '{{ _("Listening...") }}' : (loading ? '{{ _("Thinking...") }}' : '{{ _("Type or speak a message, or attach a file...") }}')"
+                        :disabled="loading"
+                        @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
+                        @input="autoResize($el)"
+                        style="resize: none; max-height: 120px;"></textarea>
+                    <input type="file"
+                           x-ref="fileInput"
+                           @change="onFileSelected($event)"
+                           multiple
+                           accept="image/*,.pdf,.txt,.csv,.xlsx,.docx"
+                           class="hidden" />
+                    <button type="button"
+                            @click="$refs.fileInput.click()"
+                            class="btn btn-ghost"
+                            :disabled="loading">
+                        {{ icon("attach-outline") }}
+                    </button>
+                    <button type="button"
+                            x-show="speechSupported"
+                            @click="toggleVoice()"
+                            class="btn"
+                            :class="recording ? 'color-error' : 'btn-ghost'"
+                            :disabled="loading">
+                        <template x-if="!recording">
+                            <span>{{ icon("mic-outline") }}</span>
+                        </template>
+                        <template x-if="recording">
+                            <span>{{ icon("stop-outline") }}</span>
+                        </template>
+                    </button>
+                    <button type="submit"
+                            class="btn color-primary"
+                            :disabled="loading">
+                        <template x-if="!loading">
+                            <span>{{ icon("send-outline") }}</span>
+                        </template>
+                        <template x-if="loading">
+                            <span class="loading loading-sm"></span>
+                        </template>
+                    </button>
+                </div>
+            </form>
+        </div>
+
+    </div><!-- /CHAT PANEL -->
+
 </div>
 
 <script nonce="{{ csp_nonce }}">
@@ -154,7 +161,8 @@
     function _registerAssistantChat() {
         Alpine.data('assistantChat', function() { return {
         loading: false,
-        conversationId: '{{ conversation_id|default("") }}',
+        conversationId: '',
+        messages: [],
         tierName: '',
         sessionsUsed: 0,
         sessionsLimit: 0,
@@ -168,12 +176,98 @@
         _wsReconnectDelay: 2000,
         _streamBubble: null,
         _streamText: '',
+        _actionLog: null,
+        _lastAssistantText: '',
+
+        init: function() {
+            this.hydrateFromStorage();
+            if (this.conversationId) {
+                this._reconnectWs();
+            }
+        },
+
+        // ── sessionStorage persistence ────────────────────────────────
+
+        hydrateFromStorage: function() {
+            try {
+                var saved = sessionStorage.getItem('assistantChat_state');
+                if (!saved) return;
+                var state = JSON.parse(saved);
+                this.conversationId = state.conversationId || '';
+                this.messages = state.messages || [];
+                var self = this;
+                this.$nextTick(function() { self._renderSavedMessages(); });
+            } catch (e) {
+                console.warn('Failed to hydrate assistant state:', e);
+            }
+        },
+
+        persistToStorage: function() {
+            try {
+                sessionStorage.setItem('assistantChat_state', JSON.stringify({
+                    conversationId: this.conversationId,
+                    messages: this.messages.slice(-50)
+                }));
+            } catch (e) {
+                console.warn('Failed to persist assistant state:', e);
+            }
+        },
+
+        _renderSavedMessages: function() {
+            var messagesEl = this.$refs && this.$refs.messages;
+            if (!messagesEl || !this.messages.length) return;
+            for (var i = 0; i < this.messages.length; i++) {
+                var msg = this.messages[i];
+                var el = document.createElement('div');
+                if (msg.role === 'user') {
+                    el.className = 'chat-message chat-user';
+                    el.innerHTML = '<div class="chat-bubble">' + this._escapeHtml(msg.text) + '</div>';
+                } else {
+                    el.className = 'chat-message chat-assistant';
+                    el.innerHTML = '<div class="chat-bubble">' + this._formatText(msg.text) + '</div>';
+                }
+                messagesEl.appendChild(el);
+            }
+            this.scrollToBottom();
+        },
+
+        _reconnectWs: function() {
+            // Open WS silently — warm up connection for next user message.
+            var self = this;
+            if (this._ws && this._ws.readyState === WebSocket.OPEN) return;
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var ws = new WebSocket(proto + '//' + location.host + '/m/assistant/ws/chat');
+            this._ws = ws;
+            ws.onopen = function() { self._wsReconnectDelay = 2000; };
+            ws.onmessage = function(e) {
+                if (!self.$refs || !self.$refs.messages) return;
+                var event;
+                try { event = JSON.parse(e.data); } catch (err) { return; }
+                self._handleWsEvent(event);
+            };
+            ws.onclose = function() {
+                self._ws = null;
+                if (self.loading && self.$refs && self.$refs.messages) {
+                    self._removeTypingIndicator();
+                    self._finishStreamBubble();
+                    self._showError('Connection lost. Please try again.');
+                    self.loading = false;
+                }
+            };
+            ws.onerror = function() {};
+        },
+
+        // ── user actions ─────────────────────────────────────────────
 
         newChat: function() {
             this.conversationId = '';
+            this.messages = [];
             this.showHelp = false;
             this.loading = false;
+            this._closeWs();
+            try { sessionStorage.removeItem('assistantChat_state'); } catch (e) {}
             var msgs = this.$refs.messages;
+            if (!msgs) return;
             var els = msgs.querySelectorAll('.chat-user, .chat-assistant:not([x-show]), .chat-system');
             els.forEach(function(el) { el.remove(); });
         },
@@ -200,10 +294,12 @@
 
         sendMessage: function() {
             var input = this.$refs.messageInput;
+            if (!input) return;
             var message = input.value.trim();
             if (!message || this.loading) return;
             this.loading = true;
             var messagesEl = this.$refs.messages;
+            if (!messagesEl) return;
             var userBubble = document.createElement('div');
             userBubble.className = 'chat-message chat-user';
             var fileInfo = '';
@@ -216,15 +312,20 @@
             }
             userBubble.innerHTML = '<div class="chat-bubble">' + this._escapeHtml(message) + fileInfo + '</div>';
             messagesEl.appendChild(userBubble);
+            // Track in messages array for persistence
+            this.messages.push({ role: 'user', text: message });
+            this.persistToStorage();
             input.value = '';
             input.style.height = 'auto';
             this._addTypingIndicator();
             this.scrollToBottom();
             this._streamBubble = null;
             this._streamText = '';
+            this._lastAssistantText = '';
             this.selectedFiles = [];
             var self = this;
-            var context = this.$refs.chatForm.querySelector('[name=context]').value;
+            var chatForm = this.$refs.chatForm;
+            var context = chatForm ? chatForm.querySelector('[name=context]').value : 'general';
             this._ensureWs(function() {
                 self._ws.send(JSON.stringify({
                     type: 'chat',
@@ -234,6 +335,8 @@
                 }));
             });
         },
+
+        // ── WebSocket ─────────────────────────────────────────────────
 
         _ensureWs: function(onReady) {
             var self = this;
@@ -249,13 +352,15 @@
                 onReady();
             };
             ws.onmessage = function(e) {
+                // Guard: bail out if component refs are gone
+                if (!self.$refs || !self.$refs.messages) return;
                 var event;
                 try { event = JSON.parse(e.data); } catch (err) { return; }
                 self._handleWsEvent(event);
             };
             ws.onclose = function(e) {
                 self._ws = null;
-                if (self.loading) {
+                if (self.loading && self.$refs && self.$refs.messages) {
                     self._removeTypingIndicator();
                     self._finishStreamBubble();
                     self._showError('Connection lost. Please try again.');
@@ -266,23 +371,28 @@
         },
 
         _handleWsEvent: function(event) {
+            var msgs = this.$refs && this.$refs.messages;
             switch (event.type) {
                 case 'thinking': break;
                 case 'text_delta':
+                    if (!msgs) break;
                     this._removeTypingIndicator();
                     this._appendText(event.text);
                     break;
                 case 'tool':
+                    if (!msgs) break;
                     this._removeTypingIndicator();
                     this._finishStreamBubble();
-                    this._showToolIndicator(event.name);
+                    this._showToolIndicator(event.name, event.args);
                     break;
                 case 'tool_result':
-                    this._removeToolIndicator();
+                    if (!msgs) break;
+                    this._removeToolIndicator(event.success);
                     this._addTypingIndicator();
                     this.scrollToBottom();
                     break;
                 case 'confirmation':
+                    if (!msgs) break;
                     this._removeTypingIndicator();
                     this._finishStreamBubble();
                     this._insertHtml(event.html);
@@ -290,6 +400,7 @@
                 case 'done':
                     this._removeTypingIndicator();
                     this._finishStreamBubble();
+                    this._actionLog = null;
                     if (event.conversation_id) this.conversationId = String(event.conversation_id);
                     if (event.tier_info) {
                         this.tierName = event.tier_info.tier_name || event.tier_info.tier || '';
@@ -297,8 +408,15 @@
                         this.sessionsLimit = event.tier_info.sessions_limit || 0;
                     }
                     this.loading = false;
+                    // Persist assistant reply accumulated during streaming
+                    if (this._lastAssistantText) {
+                        this.messages.push({ role: 'assistant', text: this._lastAssistantText });
+                        this._lastAssistantText = '';
+                        this.persistToStorage();
+                    }
                     break;
                 case 'error':
+                    if (!msgs) { this.loading = false; break; }
                     this._removeTypingIndicator();
                     this._finishStreamBubble();
                     this._showError(event.message);
@@ -316,8 +434,11 @@
             this.loading = false;
         },
 
+        // ── DOM helpers ───────────────────────────────────────────────
+
         _appendText: function(text) {
             var messagesEl = this.$refs.messages;
+            if (!messagesEl) return;
             if (!this._streamBubble) {
                 this._streamBubble = document.createElement('div');
                 this._streamBubble.className = 'chat-message chat-assistant';
@@ -326,8 +447,10 @@
                 this._streamBubble.appendChild(bubble);
                 messagesEl.appendChild(this._streamBubble);
                 this._streamText = '';
+                this._lastAssistantText = '';
             }
             this._streamText += text;
+            this._lastAssistantText += text;
             this._streamBubble.querySelector('.chat-bubble').innerHTML = this._formatText(this._streamText);
             this.scrollToBottom();
         },
@@ -335,12 +458,14 @@
         _finishStreamBubble: function() { this._streamBubble = null; this._streamText = ''; },
 
         _addTypingIndicator: function() {
+            var messagesEl = this.$refs.messages;
+            if (!messagesEl) return;
             if (document.getElementById('typing-indicator')) return;
             var typing = document.createElement('div');
             typing.className = 'chat-message chat-assistant';
             typing.id = 'typing-indicator';
             typing.innerHTML = '<div class="chat-typing"><span class="chat-typing-dot"></span><span class="chat-typing-dot"></span><span class="chat-typing-dot"></span></div>';
-            this.$refs.messages.appendChild(typing);
+            messagesEl.appendChild(typing);
         },
 
         _removeTypingIndicator: function() {
@@ -348,31 +473,77 @@
             if (el) el.remove();
         },
 
-        _showToolIndicator: function(name) {
-            var el = document.createElement('div');
-            el.className = 'chat-message chat-system';
-            el.id = 'tool-indicator';
-            el.innerHTML = '<div class="callout callout-info"><div class="callout-content"><div class="callout-text text-xs opacity-75">' + this._escapeHtml(name) + '\u2026</div></div></div>';
-            this.$refs.messages.appendChild(el);
+        _showToolIndicator: function(name, args) {
+            var messagesEl = this.$refs.messages;
+            if (!messagesEl) return;
+            var label = this._toolLabel(name, args);
+            if (!this._actionLog) {
+                var wrapper = document.createElement('div');
+                wrapper.className = 'chat-message chat-system';
+                wrapper.id = 'action-log';
+                wrapper.innerHTML = '<div class="flex flex-col gap-1 py-2 px-3 rounded-lg bg-base-200/60 text-xs font-mono max-w-md"></div>';
+                messagesEl.appendChild(wrapper);
+                this._actionLog = wrapper.firstChild;
+            }
+            var line = document.createElement('div');
+            line.className = 'flex items-center gap-2 text-base-content/70';
+            line.id = 'action-line-current';
+            line.innerHTML = '<span class="loading loading-xs loading-spinner text-primary"></span><span>' + this._escapeHtml(label) + '</span>';
+            this._actionLog.appendChild(line);
             this.scrollToBottom();
         },
 
-        _removeToolIndicator: function() { var el = document.getElementById('tool-indicator'); if (el) el.remove(); },
+        _toolLabel: function(name, args) {
+            var a = args || {};
+            var labels = {
+                'install_module': 'Instalando módulo ' + (a.module_id || ''),
+                'update_store_config': 'Configurando datos del negocio',
+                'set_business_info': 'Configurando datos del negocio',
+                'set_regional_config': 'Configurando región y moneda',
+                'set_tax_config': 'Configurando impuestos',
+                'create_tax_class': 'Creando clase de impuesto ' + (a.name || ''),
+                'create_role': 'Creando rol ' + (a.name || ''),
+                'create_employee': 'Creando empleado ' + (a.name || a.full_name || ''),
+                'bulk_create_employees': 'Creando empleados',
+                'list_modules': 'Consultando módulos disponibles',
+                'list_installed_modules': 'Comprobando módulos instalados',
+                'get_hub_config': 'Leyendo configuración actual',
+                'list_tax_classes': 'Consultando clases de impuesto',
+                'create_product': 'Creando producto ' + (a.name || ''),
+                'bulk_create_products': 'Creando productos',
+            };
+            return labels[name] || name.replace(/_/g, ' ');
+        },
+
+        _removeToolIndicator: function(success) {
+            var line = document.getElementById('action-line-current');
+            if (line) {
+                line.id = '';
+                var spinner = line.querySelector('.loading');
+                if (spinner) {
+                    spinner.className = success !== false ? 'text-success' : 'text-error';
+                    spinner.textContent = success !== false ? '✓' : '✗';
+                }
+            }
+        },
 
         _insertHtml: function(html) {
+            var messagesEl = this.$refs.messages;
+            if (!messagesEl) return;
             var tmp = document.createElement('div');
             tmp.innerHTML = html;
-            var messagesEl = this.$refs.messages;
             while (tmp.firstChild) messagesEl.appendChild(tmp.firstChild);
             if (window.htmx) htmx.process(messagesEl);
             this.scrollToBottom();
         },
 
         _showError: function(message) {
+            var messagesEl = this.$refs.messages;
+            if (!messagesEl) return;
             var el = document.createElement('div');
             el.className = 'chat-message chat-system';
             el.innerHTML = '<div class="callout callout-error"><div class="callout-content"><div class="callout-text">' + this._escapeHtml(message) + '</div></div></div>';
-            this.$refs.messages.appendChild(el);
+            messagesEl.appendChild(el);
             this.scrollToBottom();
         },
 
@@ -388,6 +559,8 @@
             return d.innerHTML;
         },
 
+        // ── Voice ─────────────────────────────────────────────────────
+
         toggleVoice: function() { this.recording ? this.stopVoice() : this.startVoice(); },
 
         startVoice: function() {
@@ -398,6 +571,7 @@
             recognition.interimResults = true;
             recognition.continuous = false;
             var input = this.$refs.messageInput;
+            if (!input) return;
             var beforeText = input.value;
             recognition.onresult = function(event) {
                 var t = '';
@@ -413,6 +587,8 @@
         },
 
         stopVoice: function() { if (this._recognition) this._recognition.stop(); this.recording = false; },
+
+        // ── Misc ──────────────────────────────────────────────────────
 
         scrollToBottom: function() {
             var self = this;

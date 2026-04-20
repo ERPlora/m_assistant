@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.ai.registry import AssistantTool, register_tool
-from app.core.db.transactions import atomic
+from apps.ai.registry import AssistantTool, register_tool
+from hotframe.orm.transactions import atomic
 
 
 @register_tool
@@ -30,7 +30,7 @@ class SetRegionalConfig(AssistantTool):
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import HubConfig
+        from apps.configuration.models import HubConfig
         async with atomic(request.state.db) as session:
             config = await HubConfig.get_config(session, request.state.hub_id)
             if not config:
@@ -63,7 +63,7 @@ class SetBusinessInfo(AssistantTool):
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import StoreConfig
+        from apps.configuration.models import StoreConfig
         async with atomic(request.state.db) as session:
             store = await StoreConfig.get_config(session, request.state.hub_id)
             if not store:
@@ -92,7 +92,7 @@ class SetTaxConfig(AssistantTool):
     }
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import StoreConfig
+        from apps.configuration.models import StoreConfig
         async with atomic(request.state.db) as session:
             store = await StoreConfig.get_config(session, request.state.hub_id)
             if not store:
@@ -113,7 +113,7 @@ class CompleteSetupStep(AssistantTool):
     parameters = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
     async def execute(self, args: dict, request: Any) -> dict:
-        from app.apps.configuration.models import HubConfig, StoreConfig
+        from apps.configuration.models import HubConfig, StoreConfig
         async with atomic(request.state.db) as session:
             hub_config = await HubConfig.get_config(session, request.state.hub_id)
             store_config = await StoreConfig.get_config(session, request.state.hub_id)

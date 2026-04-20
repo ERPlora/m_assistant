@@ -30,3 +30,22 @@ def set_selected_blocks(config: object, block_slugs: list[str]) -> list[str]:
     normalized = [slug for slug in block_slugs if slug]
     config.selected_business_types = normalized
     return normalized
+
+
+def get_selected_sectors(config: object) -> list[str]:
+    """Return the selected sector codes."""
+    sectors = getattr(config, "selected_sectors", None) or []
+    return [s for s in sectors if s]
+
+
+def get_sales_profile(config: object) -> dict:
+    """Return dict with sells_b2b, sells_b2c booleans."""
+    return {
+        "sells_b2b": bool(getattr(config, "sells_b2b", True)),
+        "sells_b2c": bool(getattr(config, "sells_b2c", True)),
+    }
+
+
+def get_region(config: object) -> str:
+    """Return sub-region code (e.g. 'ES-PV') or empty string."""
+    return getattr(config, "region", None) or ""

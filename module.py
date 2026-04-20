@@ -1,10 +1,9 @@
 MODULE_ID = "assistant"
 MODULE_NAME = "AI Assistant"
-MODULE_VERSION = "1.7.6"
+MODULE_VERSION = "1.8.1"
 MODULE_ICON = "sparkles-outline"
 MODULE_DESCRIPTION = "AI-powered business assistant with contextual tools for inventory, sales, customers, invoicing, and more. Supports voice input and tiered subscription plans."
 MODULE_AUTHOR = "ERPlora"
-MODULE_CATEGORY = "utility"
 MODULE_FUNCTIONS = ["utility", "ai"]
 MODULE_COLOR = "#7c3aed"
 
@@ -48,3 +47,26 @@ PRICING = {
 FREE_TIER_LIMITS = {
     "messages_per_month": 30,
 }
+
+
+# ---------------------------------------------------------------------------
+# New contract (Sprint 4): ModuleConfig equivalent.
+# The legacy module-level constants above are still read by the current
+# manifest loader; this class exposes the Django-like ModuleConfig contract
+# for the new runtime/apps registry.
+# ---------------------------------------------------------------------------
+
+from hotframe.apps import ModuleConfig
+
+
+class AssistantModule(ModuleConfig):
+    """AI Assistant — system module, always active, ships with Docker image."""
+
+    name = MODULE_ID
+    verbose_name = MODULE_NAME
+    version = MODULE_VERSION
+    is_system = True  # CRITICAL: cannot be deactivated or uninstalled
+    requires_restart = False
+
+    async def ready(self) -> None:
+        return None
